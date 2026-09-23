@@ -216,3 +216,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Local bot database
+matrimony.db
+*.db-journal
+*.db-wal
+*.db-shm
