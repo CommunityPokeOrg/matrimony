@@ -32,6 +32,7 @@ class MatrimonyBot(commands.Bot):
             command_prefix=self._get_prefix,
             intents=intents,
             case_insensitive=True,
+            strip_after_prefix=True,
             help_command=None,
         )
         self.config = config
@@ -60,6 +61,21 @@ class MatrimonyBot(commands.Bot):
         Other bots' messages ARE processed so that bot accounts can propose,
         accept, and adopt like human users."""
         return self.user is None or message.author.id != self.user.id
+
+    async def process_commands(self, message: discord.Message) -> None:
+        """Dispatch ``message`` as a command.
+
+        discord.py's built-in version silently drops every message whose
+        author is a bot; bots are first-class users here, so the parser only
+        skips this bot's own messages (``should_process``). Stray whitespace
+        around the command text is tolerated."""
+        if not self.should_process(message):
+            return
+        content = message.content.strip()
+        if content != message.content:
+            message.content = content
+        ctx = await self.get_context(message)
+        await self.invoke(ctx)
 
     async def on_message(self, message: discord.Message) -> None:
         if not self.should_process(message):

@@ -22,7 +22,8 @@ log = logging.getLogger("matrimony.gifs")
 BASE_URL = "https://api.fluxpoint.dev/sfw/gif"
 DEFAULT_TIMEOUT = 10.0
 
-# Fluxpoint endpoints used by Matrimony's action commands.
+# Fluxpoint endpoints used by Matrimony's action commands - the full set
+# documented at the URL above.
 GIF_TYPES = (
     "baka",
     "bite",
@@ -45,6 +46,12 @@ GIF_TYPES = (
     "shrug",
     "slap",
     "smug",
+    "stare",
+    "tickle",
+    "wag",
+    "wasted",
+    "wave",
+    "wink",
 )
 
 

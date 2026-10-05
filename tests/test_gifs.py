@@ -12,7 +12,7 @@ from matrimony.bot import MatrimonyBot
 from matrimony.cogs import matr as matr_mod
 from matrimony.cogs.matr import MatrCog
 from matrimony.config import DEFAULT_FLUXPOINT_API_KEY, Config
-from matrimony.gifs import FluxpointClient
+from matrimony.gifs import GIF_TYPES, FluxpointClient
 
 GIF_URL = "https://img.fluxpoint.dev/123.gif"
 PAYLOAD = {
@@ -261,3 +261,35 @@ def test_proposal_still_works_when_gif_unavailable() -> None:
     run(matr_mod.matr_accept.callback(ctx_b, None))
     assert bot.store.partners_of(a.id) == [b.id]
     assert last_embed(ctx_b).image.url is None
+
+
+# ---------------------------------------------------------------------------
+# Action command coverage
+# ---------------------------------------------------------------------------
+
+
+def test_fun_commands_all_registered() -> None:
+    """Every entry in _FUN_VERBS becomes a real ``matr`` subcommand."""
+    names = {c.name for c in matr_mod.matr.commands}
+    assert set(matr_mod._FUN_VERBS) <= names
+
+
+def test_fun_gif_types_are_documented_endpoints() -> None:
+    """Every command's GIF type must be a real Fluxpoint endpoint - a typo
+    here would silently produce GIF-less replies in production."""
+    for name, (_, _, gif_type) in matr_mod._FUN_VERBS.items():
+        assert gif_type in GIF_TYPES, name
+
+
+def test_every_fun_command_fetches_and_embeds_its_gif() -> None:
+    """Each action command hits its mapped endpoint and embeds the URL."""
+    for name, (verb, _, gif_type) in matr_mod._FUN_VERBS.items():
+        bot = make_bot()
+        fetch = stub_gifs(bot)
+        ctx = ctx_for(bot, user(1))
+        cmd = next(c for c in matr_mod.matr.commands if c.name == name)
+        run(cmd.callback(ctx, user(2)))
+        fetch.assert_awaited_once_with(gif_type)
+        embed = last_embed(ctx)
+        assert embed.image.url == GIF_URL, name
+        assert verb in embed.description, name

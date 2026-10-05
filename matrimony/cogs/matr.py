@@ -252,7 +252,9 @@ def _help_embed(prefix: str, cmd: str) -> discord.Embed:
             "`forcedivorce @a [@b]` - `forceadopt @parent @child` - "
             "`forceemancipate @user`\n"
             "**Fun**\n"
-            "`hug`/`kiss`/`slap`/`punch`/`bite`/`stab @user` - `ship @a @b`\n"
+            "`hug`/`cuddle`/`kiss`/`pat`/`poke`/`wave`/`lick`/`nom`\n"
+            "`tickle`/`highfive`/`handhold`/`slap`/`punch`/`bite`/`stab "
+            "@user` - `ship @a @b`\n"
             "**Meta**\n"
             "`info` - `invite` - `stats`\n\n"
             "Family trees are global across servers, and bot accounts can "
@@ -772,7 +774,18 @@ async def matr_forceemancipate(ctx: commands.Context, child: discord.User) -> No
 # name -> (past-tense verb, emoji, Fluxpoint gif type)
 _FUN_VERBS = {
     "hug": ("hugs", ":hugging:", "hug"),
+    # Fluxpoint has no "cuddle" endpoint; hug is the same gesture.
+    "cuddle": ("cuddles", ":people_hugging:", "hug"),
     "kiss": ("kisses", ":kissing_heart:", "kiss"),
+    "pat": ("pats", ":hand_splayed:", "pat"),
+    "poke": ("pokes", ":point_right:", "poke"),
+    "wave": ("waves at", ":wave:", "wave"),
+    "lick": ("licks", ":tongue:", "lick"),
+    # Fluxpoint has no "nom" endpoint; feed is the same gesture.
+    "nom": ("noms", ":yum:", "feed"),
+    "tickle": ("tickles", ":raised_hand:", "tickle"),
+    "highfive": ("high-fives", ":raised_hands:", "highfive"),
+    "handhold": ("holds hands with", ":handshake:", "handhold"),
     "slap": ("slaps", ":raised_back_of_hand:", "slap"),
     "punch": ("punches", ":punch:", "punch"),
     "bite": ("bites", ":tooth:", "bite"),

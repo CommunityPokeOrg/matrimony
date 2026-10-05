@@ -173,6 +173,124 @@ def test_proposal_declined_by_bot() -> None:
 
 
 # ---------------------------------------------------------------------------
+# End-to-end dispatch through process_commands (real parser, fake message)
+# ---------------------------------------------------------------------------
+
+
+def wire_message(bot, author, content: str, guild_id: int = 42):
+    """A message fake enough to run through the real command parser."""
+    return SimpleNamespace(
+        id=1,
+        author=author,
+        content=content,
+        guild=SimpleNamespace(id=guild_id, get_member=lambda uid: None),
+        channel=SimpleNamespace(id=7),
+        to_message_reference_dict=lambda: {"message_id": 1},
+        attachments=[],
+        _state=bot._connection,
+    )
+
+
+def stub_send(bot) -> AsyncMock:
+    """Intercept the HTTP layer so replies don't hit the network."""
+    bot._connection.http.send_message = AsyncMock(return_value={"id": "2"})
+    # Skip real discord.Message construction for the sent reply.
+    bot._connection.create_message = (
+        lambda channel, data: SimpleNamespace(id=int(data.get("id", 0)))
+    )
+    return bot._connection.http.send_message
+
+
+def test_process_commands_dispatches_bot_author_end_to_end() -> None:
+    """Regression: discord.py's built-in process_commands silently drops
+    every message whose author is a bot. Ours must reach the command and
+    produce a reply - this is what lets other bots use ``!matr``."""
+    bot = make_bot()
+    send = stub_send(bot)
+    msg = wire_message(bot, user(2, bot=True), "!matr help")
+    run(bot.process_commands(msg))
+    send.assert_awaited_once()
+
+
+def test_process_commands_human_author_end_to_end() -> None:
+    bot = make_bot()
+    send = stub_send(bot)
+    msg = wire_message(bot, user(1), "!matr help")
+    run(bot.process_commands(msg))
+    send.assert_awaited_once()
+
+
+def test_process_commands_skips_own_messages() -> None:
+    """The self-command loop guard still applies."""
+    bot = make_bot()
+    send = stub_send(bot)
+    msg = wire_message(bot, user(BOT_USER_ID, bot=True), "!matr help")
+    run(bot.process_commands(msg))
+    send.assert_not_awaited()
+
+
+def test_process_commands_ignores_non_command() -> None:
+    bot = make_bot()
+    send = stub_send(bot)
+    msg = wire_message(bot, user(1), "just chatting")
+    run(bot.process_commands(msg))
+    send.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Lenient parsing: whitespace, extra text, mentions
+# ---------------------------------------------------------------------------
+
+
+def test_whitespace_after_prefix() -> None:
+    bot = make_bot()
+    send = stub_send(bot)
+    msg = wire_message(bot, user(1), "!  matr help")
+    run(bot.process_commands(msg))
+    send.assert_awaited_once()
+
+
+def test_whitespace_between_group_and_subcommand() -> None:
+    bot = make_bot()
+    send = stub_send(bot)
+    msg = wire_message(bot, user(1), "!matr    help")
+    run(bot.process_commands(msg))
+    send.assert_awaited_once()
+
+
+def test_surrounding_whitespace() -> None:
+    bot = make_bot()
+    send = stub_send(bot)
+    msg = wire_message(bot, user(1), "   !matr help   ")
+    run(bot.process_commands(msg))
+    send.assert_awaited_once()
+
+
+def test_extra_text_after_arguments() -> None:
+    bot = make_bot()
+    send = stub_send(bot)
+    msg = wire_message(bot, user(1), "!matr help and some trailing text")
+    run(bot.process_commands(msg))
+    send.assert_awaited_once()
+
+
+def test_mention_prefix() -> None:
+    bot = make_bot()
+    send = stub_send(bot)
+    msg = wire_message(bot, user(1), f"<@{BOT_USER_ID}> matr help")
+    run(bot.process_commands(msg))
+    send.assert_awaited_once()
+
+
+def test_mention_prefix_from_bot_author() -> None:
+    bot = make_bot()
+    send = stub_send(bot)
+    msg = wire_message(bot, user(3, bot=True), f"<@{BOT_USER_ID}> matr help")
+    run(bot.process_commands(msg))
+    send.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
 # Prefix resolution
 # ---------------------------------------------------------------------------
 
@@ -187,3 +305,20 @@ def test_custom_guild_prefix() -> None:
     # DM/other guild falls back to default
     other = message(user(1), guild=SimpleNamespace(id=99))
     assert "!" in run(bot._get_prefix(bot, other))
+
+
+def test_custom_guild_prefix_end_to_end() -> None:
+    bot = make_bot()
+    send = stub_send(bot)
+    bot.store.set_prefix(42, "?")
+    msg = wire_message(bot, user(1), "?matr help", guild_id=42)
+    run(bot.process_commands(msg))
+    send.assert_awaited_once()
+
+
+def test_case_insensitive_command() -> None:
+    bot = make_bot()
+    send = stub_send(bot)
+    msg = wire_message(bot, user(1), "!MATR HELP")
+    run(bot.process_commands(msg))
+    send.assert_awaited_once()
