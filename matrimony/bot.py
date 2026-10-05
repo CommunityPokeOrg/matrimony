@@ -9,6 +9,7 @@ from discord.ext import commands
 
 from .config import Config
 from .family import FamilyView
+from .gifs import FluxpointClient
 from .store import Store
 
 log = logging.getLogger("matrimony")
@@ -36,6 +37,7 @@ class MatrimonyBot(commands.Bot):
         self.config = config
         self.store = store or Store(config.database_path)
         self.family = FamilyView(self.store)
+        self.gifs = FluxpointClient(config.fluxpoint_api_key)
 
     # ------------------------------------------------------------- prefixes
 
@@ -65,6 +67,10 @@ class MatrimonyBot(commands.Bot):
         await self.process_commands(message)
 
     # --------------------------------------------------------------- setup
+
+    async def close(self) -> None:
+        await self.gifs.close()
+        await super().close()
 
     async def setup_hook(self) -> None:
         from .cogs import ALL_COGS

@@ -29,7 +29,10 @@ All commands live under one group, `matr`, invoked with a per-guild prefix
 - **Blocks** — users can `block`/`unblock` others from proposing to them.
 - **Admin force commands** — `forcemarry`, `forcedivorce`, `forceadopt`,
   `forceemancipate` (Manage Server).
-- **Fun commands** — `hug`, `kiss`, `slap`, `punch`, `bite`, `stab`, `ship`.
+- **Fun commands** — `hug`, `kiss`, `slap`, `punch`, `bite`, `stab`, `ship`,
+  each with a random SFW anime GIF via the
+  [Fluxpoint API](https://docs.fluxpoint.dev/api/endpoints/sfw-anime-gifs)
+  (like the original MarriageBot).
 - **Meta** — `info`, `invite`, `stats`, `help`.
 
 ## Bot accounts are first-class
@@ -71,8 +74,8 @@ explicitly supports bot-authored commands and bot targets:
 | `!matr forcedivorce @a [@b]` | Force-divorce (Manage Server) |
 | `!matr forceadopt @parent @child` | Force adoption (Manage Server) |
 | `!matr forceemancipate @user` | Force-remove a parent (Manage Server) |
-| `!matr hug`/`kiss`/`slap`/`punch`/`bite`/`stab @user` | Flavour actions |
-| `!matr ship @a [@b]` | Deterministic ship percentage |
+| `!matr hug`/`kiss`/`slap`/`punch`/`bite`/`stab @user` | Flavour actions (+ GIF) |
+| `!matr ship @a [@b]` | Deterministic ship percentage (+ GIF) |
 | `!matr info` / `invite` / `stats` | Bot information |
 
 `@Matrimony matr ...` (mention prefix) also always works.
@@ -115,6 +118,28 @@ docker run -e MATRIMONY_TOKEN=... -v matrimony-data:/data matrimony
 | `MATRIMONY_MAX_CHILDREN` | `0` | Children cap per user (0 = unlimited) |
 | `MATRIMONY_MAX_TREE_DEPTH` | `10` | Depth limit when rendering trees |
 | `MATRIMONY_PROPOSAL_TTL` | `300` | Seconds before a proposal expires |
+| `FLUXPOINT_API_KEY` | Fluxpoint's shared public key | Fluxpoint API token for action GIFs; set to empty to disable |
+
+## Action GIFs
+
+Action replies embed a random SFW anime GIF fetched from the Fluxpoint API
+(`GET https://api.fluxpoint.dev/sfw/gif/<type>`, token in the `Authorization`
+header). Mappings:
+
+| Command | Fluxpoint endpoint |
+| --- | --- |
+| `marry` (marriage completed) | `kiss` |
+| `divorce` | `cry` |
+| `hug` | `hug` |
+| `kiss` | `kiss` |
+| `slap` | `slap` |
+| `punch` | `punch` |
+| `bite` | `bite` |
+| `stab` | `punch` *(no `stab` endpoint exists; closest fit)* |
+| `ship` | `handhold` |
+
+GIF fetching never blocks the action: a missing/empty key, HTTP error,
+timeout, or malformed response just sends the reply without an image.
 
 ## Fidelity to the original MarriageBot
 
@@ -146,6 +171,9 @@ Matrimony replicates the original's mechanics as closely as is practical
   replicated; limits are plain env vars instead.
 - Slash-command-only upstream additions (`customize-tree`, `transfer-gold`,
   `runaway` alias kept as `emancipate` alias) are out of scope.
+- Upstream sources GIFs from its own store; Matrimony uses Fluxpoint's SFW
+  anime GIF API (provider's public-tier key by default, override via
+  `FLUXPOINT_API_KEY`).
 
 **Sources:**
 

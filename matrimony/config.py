@@ -5,6 +5,10 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
+# Fluxpoint's shared public-tier key: the API provider ships it for bots to
+# use as a default (see https://fluxpoint.dev). Override with FLUXPOINT_API_KEY.
+DEFAULT_FLUXPOINT_API_KEY = "FP-Public-naEjca70OhKMtq67WpzaN8Gs"
+
 
 @dataclass(frozen=True)
 class Config:
@@ -22,6 +26,10 @@ class Config:
         max_children: Maximum children per user. 0 = unlimited.
         max_tree_depth: Depth limit applied when rendering family trees.
         proposal_ttl_seconds: How long a proposal stays open.
+        fluxpoint_api_key: Fluxpoint API token used to fetch action GIFs.
+            Defaults to the provider's public-tier key; set
+            ``FLUXPOINT_API_KEY`` to your own token, or to an empty string
+            to disable GIF fetching entirely.
     """
 
     token: str = ""
@@ -32,6 +40,7 @@ class Config:
     max_children: int = 0
     max_tree_depth: int = 10
     proposal_ttl_seconds: int = 300
+    fluxpoint_api_key: str = DEFAULT_FLUXPOINT_API_KEY
 
     @classmethod
     def from_env(cls, env: dict[str, str] | None = None) -> Config:
@@ -45,4 +54,7 @@ class Config:
             max_children=int(env.get("MATRIMONY_MAX_CHILDREN", "0")),
             max_tree_depth=int(env.get("MATRIMONY_MAX_TREE_DEPTH", "10")),
             proposal_ttl_seconds=int(env.get("MATRIMONY_PROPOSAL_TTL", "300")),
+            fluxpoint_api_key=env.get(
+                "FLUXPOINT_API_KEY", DEFAULT_FLUXPOINT_API_KEY
+            ),
         )

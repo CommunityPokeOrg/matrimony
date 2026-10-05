@@ -29,8 +29,16 @@ def _embed(text: str, colour: discord.Color = GREEN) -> discord.Embed:
     return discord.Embed(description=text, colour=colour)
 
 
-async def _say(ctx: commands.Context, text: str, ok: bool = True) -> None:
-    await ctx.reply(embed=_embed(text, GREEN if ok else RED))
+async def _say(
+    ctx: commands.Context,
+    text: str,
+    ok: bool = True,
+    image: str | None = None,
+) -> None:
+    emb = _embed(text, GREEN if ok else RED)
+    if image:
+        emb.set_image(url=image)
+    await ctx.reply(embed=emb)
 
 
 def _display(user: discord.User | discord.Member | None, author_id: int) -> str:
@@ -54,8 +62,15 @@ def _name_of(bot: MatrimonyBot, guild: discord.Guild | None):
     return name_of
 
 
-async def _respond(ctx_or_interaction, text: str, ok: bool) -> None:
+async def _respond(
+    ctx_or_interaction,
+    text: str,
+    ok: bool,
+    image: str | None = None,
+) -> None:
     emb = _embed(text, GREEN if ok else RED)
+    if image:
+        emb.set_image(url=image)
     if isinstance(ctx_or_interaction, discord.Interaction):
         if ctx_or_interaction.response.is_done():
             await ctx_or_interaction.followup.send(embed=emb)
@@ -132,10 +147,12 @@ async def _enact(bot: MatrimonyBot, proposal: Proposal, ctx_or_int) -> None:
     target = _name_of(bot, None)(proposal.target)
     if proposal.kind == "marry":
         bot.store.add_partners(proposal.proposer, proposal.target)
+        gif = await bot.gifs.fetch_url("kiss")
         await _respond(
             ctx_or_int,
             f"{proposer} and {target} are now married! :tada:",
             True,
+            image=gif,
         )
     elif proposal.kind == "adopt":
         # proposer adopts target as their child
@@ -317,10 +334,12 @@ async def matr_divorce(
         await _say(ctx, "You're not married to them.", ok=False)
         return
     bot.store.remove_partners(ctx.author.id, target)
+    gif = await bot.gifs.fetch_url("cry")
     await _say(
         ctx,
         f"{ctx.author.mention} and <@{target}> are now divorced. "
         ":broken_heart:",
+        image=gif,
     )
 
 
@@ -750,25 +769,34 @@ async def matr_forceemancipate(ctx: commands.Context, child: discord.User) -> No
 # Fun (simulation) commands
 # ---------------------------------------------------------------------------
 
+# name -> (past-tense verb, emoji, Fluxpoint gif type)
 _FUN_VERBS = {
-    "hug": ("hugs", ":hugging:"),
-    "kiss": ("kisses", ":kissing_heart:"),
-    "slap": ("slaps", ":raised_back_of_hand:"),
-    "punch": ("punches", ":punch:"),
-    "bite": ("bites", ":tooth:"),
-    "stab": ("stabs", ":dagger:"),
+    "hug": ("hugs", ":hugging:", "hug"),
+    "kiss": ("kisses", ":kissing_heart:", "kiss"),
+    "slap": ("slaps", ":raised_back_of_hand:", "slap"),
+    "punch": ("punches", ":punch:", "punch"),
+    "bite": ("bites", ":tooth:", "bite"),
+    # Fluxpoint has no "stab" endpoint; punch is the closest violent action.
+    "stab": ("stabs", ":dagger:", "punch"),
 }
 
 
 def _make_fun(name: str) -> None:
-    verb, emoji = _FUN_VERBS[name]
+    verb, emoji, gif_type = _FUN_VERBS[name]
 
     @matr.command(name=name)
     async def _fun(ctx: commands.Context, user: discord.User) -> None:
+        gif = await _bot(ctx).gifs.fetch_url(gif_type)
         if user.id == ctx.author.id:
-            await _say(ctx, f"You {verb} yourself. Okay then. {emoji}")
+            await _say(
+                ctx, f"You {verb} yourself. Okay then. {emoji}", image=gif
+            )
         else:
-            await _say(ctx, f"{ctx.author.mention} {verb} {user.mention}! {emoji}")
+            await _say(
+                ctx,
+                f"{ctx.author.mention} {verb} {user.mention}! {emoji}",
+                image=gif,
+            )
 
     _fun.__doc__ = f"{name.capitalize()} another user."
 
@@ -785,7 +813,10 @@ async def matr_ship(
     b = b or ctx.author
     lo, hi = sorted((a.id, b.id))
     pct = int(hashlib.md5(f"{lo}:{hi}".encode()).hexdigest()[:6], 16) % 101
-    await _say(ctx, f"{a.mention} x {b.mention}: **{pct}%** :heart:")
+    gif = await _bot(ctx).gifs.fetch_url("handhold")
+    await _say(
+        ctx, f"{a.mention} x {b.mention}: **{pct}%** :heart:", image=gif
+    )
 
 
 # ---------------------------------------------------------------------------
