@@ -57,10 +57,20 @@ class MatrimonyBot(commands.Bot):
     def should_process(self, message: discord.Message) -> bool:
         """Whether ``message`` should be run through the command parser.
 
-        Returns False only for this bot's own messages (self-loop guard).
-        Other bots' messages ARE processed so that bot accounts can propose,
-        accept, and adopt like human users."""
-        return self.user is None or message.author.id != self.user.id
+        Returns False for this bot's own messages (self-loop guard) and for
+        messages in channels outside the guild's allow-list
+        (``MATRIMONY_ALLOWED_CHANNELS``) — those commands are silently
+        ignored. Guilds with no entry in the mapping are unrestricted, and
+        DMs are never restricted. Other bots' messages ARE processed so
+        that bot accounts can propose, accept, and adopt like human
+        users."""
+        if self.user is not None and message.author.id == self.user.id:
+            return False
+        guild = message.guild
+        if guild is None:
+            return True
+        allowed = self.config.allowed_channels.get(guild.id)
+        return allowed is None or message.channel.id in allowed
 
     async def process_commands(self, message: discord.Message) -> None:
         """Dispatch ``message`` as a command.

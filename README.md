@@ -24,6 +24,8 @@ All commands live under one group, `matr`, invoked with a per-guild prefix
 - **Global trees** — like the original MarriageBot, family relationships are
   stored globally and follow users across every server the bot is in.
 - **Custom prefixes** — per-guild prefix (`!matr prefix ?` → `?matr marry`).
+- **Channel restrictions** — optional per-guild allow-lists confine
+  commands to specific channels (`MATRIMONY_ALLOWED_CHANNELS`).
 - **Incest toggle** — `!matr incest` lets server admins permit proposals
   between family members (off by default, as upstream).
 - **Blocks** — users can `block`/`unblock` others from proposing to them.
@@ -126,7 +128,30 @@ docker run -e MATRIMONY_TOKEN=... -v matrimony-data:/data matrimony
 | `MATRIMONY_MAX_CHILDREN` | `0` | Children cap per user (0 = unlimited) |
 | `MATRIMONY_MAX_TREE_DEPTH` | `10` | Depth limit when rendering trees |
 | `MATRIMONY_PROPOSAL_TTL` | `300` | Seconds before a proposal expires |
+| `MATRIMONY_ALLOWED_CHANNELS` | *(unset)* | JSON object mapping guild ids to lists of allowed channel ids (see below) |
+| `MATRIMONY_ALLOWED_CHANNELS_FILE` | *(unset)* | Path to a JSON file with the same mapping; used when `MATRIMONY_ALLOWED_CHANNELS` is unset |
 | `FLUXPOINT_API_KEY` | Fluxpoint's shared public key | Fluxpoint API token for action GIFs; set to empty to disable |
+
+### Channel restrictions
+
+`MATRIMONY_ALLOWED_CHANNELS` takes a JSON object that maps a guild id to
+the list of channel ids where commands are accepted:
+
+```bash
+MATRIMONY_ALLOWED_CHANNELS='{"123456789012345678": ["111222333444555666", "777888999000111222"]}'
+```
+
+A guild absent from the mapping is unrestricted (existing deployments are
+unaffected). A guild mapped to an empty list (`"123": []`) accepts commands
+in no channel. Commands used outside the allowed channels are **silently
+ignored** — the message is never dispatched, matching how the bot already
+ignores its own messages. DMs are never restricted. Threads are their own
+channels: add the thread's id if commands should work there.
+
+For larger setups, put the same JSON object in a file and point
+`MATRIMONY_ALLOWED_CHANNELS_FILE` at it (the inline variable wins when
+both are set). A malformed value logs a warning and is treated as no
+restriction, so a typo can't lock every server out of the bot.
 
 ## Action GIFs
 
