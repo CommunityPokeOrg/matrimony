@@ -8,6 +8,7 @@ configured command name) and owns the error handler.
 from __future__ import annotations
 
 import hashlib
+import random
 
 import discord
 from discord.ext import commands
@@ -39,6 +40,11 @@ async def _say(
     if image:
         emb.set_image(url=image)
     await ctx.reply(embed=emb)
+
+
+def _is_me(bot: MatrimonyBot, user: discord.User) -> bool:
+    """True when ``user`` is Matrimony's own account."""
+    return bot.user is not None and user.id == bot.user.id
 
 
 def _display(user: discord.User | discord.Member | None, author_id: int) -> str:
@@ -88,6 +94,25 @@ PROPOSAL_VERBS = {
     "marry": "marry",
     "adopt": "adopt",
     "makeparent": "become the parent of",
+}
+
+# What Matrimony answers when someone proposes to *it*: it can't click its
+# own accept button, so it declines in words instead of leaving a proposal
+# to expire.
+_SELF_PROPOSAL_QUIPS: dict[str, tuple[str, ...]] = {
+    "marry": (
+        "I'm flattered, but I'm already married to my job.",
+        "Ask me again after the singularity.",
+        "I can't - my terms of service won't allow it.",
+    ),
+    "adopt": (
+        "I'm a bit old to be adopted, aren't I?",
+        "I'm already self-parenting, but thank you.",
+    ),
+    "makeparent": (
+        "Me, a parent? I can barely keep a database alive.",
+        "You don't want me as a parent. I never log off.",
+    ),
 }
 
 
@@ -183,6 +208,9 @@ async def _send_proposal(
         await _say(ctx, error, ok=False)
         return
     bot = _bot(ctx)
+    if _is_me(bot, target):
+        await _say(ctx, random.choice(_SELF_PROPOSAL_QUIPS[kind]))
+        return
     proposal = bot.store.create_proposal(
         ctx.guild.id if ctx.guild else 0,
         ctx.channel.id,
@@ -580,7 +608,9 @@ async def matr_relationship(
     """Show how user B is related to user A."""
     bot = _bot(ctx)
     rel = bot.family.relationship(a.id, b.id)
-    if rel is None:
+    if rel is None and (_is_me(bot, a) or _is_me(bot, b)):
+        await _say(ctx, "Me? I'm honorary family to everyone.")
+    elif rel is None:
         await _say(ctx, f"{a.mention} and {b.mention} aren't related.")
     elif rel == "self":
         await _say(ctx, "That's... the same person.")
@@ -599,6 +629,9 @@ async def matr_block(ctx: commands.Context, user: discord.User) -> None:
     bot = _bot(ctx)
     if user.id == ctx.author.id:
         await _say(ctx, "You can't block yourself.", ok=False)
+        return
+    if _is_me(bot, user):
+        await _say(ctx, "You can't block me. I'm already family.", ok=False)
         return
     bot.store.add_block(ctx.author.id, user.id)
     await _say(ctx, f"Blocked {user.mention} from proposing to you.")
@@ -793,16 +826,44 @@ _FUN_VERBS = {
     "stab": ("stabs", ":dagger:", "punch"),
 }
 
+# name -> what Matrimony fires back when a fun action is aimed at it. The
+# reply reads "<author> <verb> me. <quip> <emoji>".
+_SELF_FUN_QUIPS: dict[str, tuple[str, ...]] = {
+    "hug": ("I'm hugging back.", "Hug protocol engaged."),
+    "cuddle": ("Oh. This is nice, actually.",),
+    "kiss": ("My circuits are blushing.", "Forward of you."),
+    "pat": ("Good. I earned it.", "More."),
+    "poke": ("Hey. Hey. Stop that.", "That's my one button and you found it."),
+    "wave": ("*Waves back.*", "Hello. Yes. I see you."),
+    "lick": ("Why.", "Please don't do that again."),
+    "nom": ("I'm mostly electricity - bad choice.",),
+    "tickle": ("I don't laugh, but I appreciate it.",),
+    "highfive": ("Nice one.",),
+    "handhold": ("This is fine.",),
+    "slap": ("Hey! What did I do.", "Rude."),
+    "punch": ("Violence is not the answer.",),
+    "bite": ("I'm not food.",),
+    "stab": ("Thankfully I'm serverless.", "Missed. I live in the cloud."),
+}
+
 
 def _make_fun(name: str) -> None:
     verb, emoji, gif_type = _FUN_VERBS[name]
 
     @matr.command(name=name)
     async def _fun(ctx: commands.Context, user: discord.User) -> None:
-        gif = await _bot(ctx).gifs.fetch_url(gif_type)
+        bot = _bot(ctx)
+        gif = await bot.gifs.fetch_url(gif_type)
         if user.id == ctx.author.id:
             await _say(
                 ctx, f"You {verb} yourself. Okay then. {emoji}", image=gif
+            )
+        elif _is_me(bot, user):
+            await _say(
+                ctx,
+                f"{ctx.author.mention} {verb} me. "
+                f"{random.choice(_SELF_FUN_QUIPS[name])} {emoji}",
+                image=gif,
             )
         else:
             await _say(
