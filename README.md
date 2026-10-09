@@ -35,6 +35,9 @@ All commands live under one group, `matr`, invoked with a per-guild prefix
   each with a random SFW anime GIF via the
   [Fluxpoint API](https://docs.fluxpoint.dev/api/endpoints/sfw-anime-gifs)
   (like the original MarriageBot).
+- **Easter egg** — accuse the bot of fathering your child (pregnancy,
+  paternity, child support...) and it will deny everything, citing its
+  empty `children` list.
 - **Meta** — `info`, `invite`, `stats`, `help`.
 
 ## Bot accounts are first-class
