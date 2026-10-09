@@ -173,6 +173,98 @@ def test_proposal_declined_by_bot() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Quips for actions aimed at Matrimony itself
+# ---------------------------------------------------------------------------
+
+
+def itself():
+    """A user object standing in for Matrimony's own account."""
+    return user(BOT_USER_ID, bot=True, name="Matrimony")
+
+
+def last_reply_description(ctx) -> str:
+    return ctx.reply.call_args.kwargs["embed"].description
+
+
+def test_marry_the_bot_quips_no_proposal() -> None:
+    """Proposing to Matrimony gets a quip, not a proposal nobody can accept."""
+    bot = make_bot()
+    ctx = ctx_for(bot, user(300))
+    run(matr_mod.matr_marry.callback(ctx, itself()))
+    ctx.reply.assert_awaited_once()
+    assert bot.store.proposals_for(BOT_USER_ID) == []
+    assert (
+        last_reply_description(ctx) in matr_mod._SELF_PROPOSAL_QUIPS["marry"]
+    )
+
+
+def test_adopt_the_bot_quips_no_proposal() -> None:
+    bot = make_bot()
+    ctx = ctx_for(bot, user(301))
+    run(matr_mod.matr_adopt.callback(ctx, itself()))
+    ctx.reply.assert_awaited_once()
+    assert bot.store.proposals_for(BOT_USER_ID) == []
+    assert (
+        last_reply_description(ctx) in matr_mod._SELF_PROPOSAL_QUIPS["adopt"]
+    )
+
+
+def test_makeparent_the_bot_quips_no_proposal() -> None:
+    bot = make_bot()
+    ctx = ctx_for(bot, user(302))
+    run(matr_mod.matr_makeparent.callback(ctx, itself()))
+    ctx.reply.assert_awaited_once()
+    assert bot.store.proposals_for(BOT_USER_ID) == []
+    assert (
+        last_reply_description(ctx)
+        in matr_mod._SELF_PROPOSAL_QUIPS["makeparent"]
+    )
+
+
+def test_marry_another_bot_still_proposes() -> None:
+    """Only *this* bot quips - proposals to other bots still go through."""
+    bot = make_bot()
+    ctx = ctx_for(bot, user(303))
+    run(matr_mod.matr_marry.callback(ctx, user(400, bot=True)))
+    assert len(bot.store.proposals_for(400, "marry")) == 1
+
+
+def test_pat_the_bot_quips() -> None:
+    bot = make_bot()
+    bot.gifs.fetch_url = AsyncMock(return_value=None)
+    ctx = ctx_for(bot, user(304))
+    pat = matr_mod.matr.get_command("pat")
+    run(pat.callback(ctx, itself()))
+    desc = last_reply_description(ctx)
+    assert "<@304> pats me." in desc
+    assert any(quip in desc for quip in matr_mod._SELF_FUN_QUIPS["pat"])
+
+
+def test_pat_other_user_unchanged() -> None:
+    bot = make_bot()
+    bot.gifs.fetch_url = AsyncMock(return_value=None)
+    ctx = ctx_for(bot, user(305))
+    pat = matr_mod.matr.get_command("pat")
+    run(pat.callback(ctx, user(500)))
+    assert "<@305> pats <@500>!" in last_reply_description(ctx)
+
+
+def test_block_the_bot_quips() -> None:
+    bot = make_bot()
+    ctx = ctx_for(bot, user(306))
+    run(matr_mod.matr_block.callback(ctx, itself()))
+    assert "can't block me" in last_reply_description(ctx)
+    assert bot.store.blocked_users(306) == []
+
+
+def test_relationship_with_the_bot_quips() -> None:
+    bot = make_bot()
+    ctx = ctx_for(bot, user(307))
+    run(matr_mod.matr_relationship.callback(ctx, user(307), itself()))
+    assert "honorary family" in last_reply_description(ctx)
+
+
+# ---------------------------------------------------------------------------
 # End-to-end dispatch through process_commands (real parser, fake message)
 # ---------------------------------------------------------------------------
 

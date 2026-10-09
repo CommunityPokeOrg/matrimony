@@ -54,6 +54,10 @@ explicitly supports bot-authored commands and bot targets:
   after the arguments are tolerated, `@Matrimony matr ...` works as a
   mention prefix, and whitespace after the prefix (`! matr help`) is
   accepted.
+- Aiming a command at Matrimony itself earns a quip: proposals to the bot
+  are politely declined (it can't click its own accept button), and the
+  fun commands (`pat`, `hug`, ...) fire back a line instead of narrating
+  at it.
 - Covered by tests: proposal/accept flows driven by bot-authored commands
   (`tests/test_dispatch.py`).
 
