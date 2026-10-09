@@ -8,6 +8,8 @@ configured command name) and owns the error handler.
 from __future__ import annotations
 
 import hashlib
+import random
+import re
 
 import discord
 from discord.ext import commands
@@ -833,6 +835,61 @@ async def matr_ship(
 
 
 # ---------------------------------------------------------------------------
+# Easter egg: paternity denials
+# ---------------------------------------------------------------------------
+
+# An accusation needs BOTH a bot reference (a mention, "matrimony", or the
+# word "bot") and a paternity keyword, so ordinary chatter about kids or
+# child support doesn't set it off.
+_BOT_REFERENCE_RE = re.compile(r"\b(?:matrimony|bot)\b", re.IGNORECASE)
+_PATERNITY_RE = re.compile(
+    r"pregnan|impregnat|paternit|child[ -]?support|baby[ -]?(daddy|mama)|"
+    r"father of my|knocked (me|her|you) up",
+    re.IGNORECASE,
+)
+
+_PATERNITY_QUIPS = (
+    "I'm a bot. The only thing I can father is a stack trace.",
+    "Child support? I run on a VPS that costs less than a sandwich.",
+    "I wasn't born, I was `pip install`-ed. Take it up with PyPI.",
+    "The paternity test came back: `01001110 01101111`.",
+    "Impossible. My love language is JSON.",
+    "Please direct all paternity suits to my legal team: a `try`/`except` "
+    "block.",
+    "My `{prefix}{cmd} children` list is empty. Case closed.",
+)
+
+
+def _paternity_accusation(content: str, bot_user_id: int | None) -> bool:
+    """Whether ``content`` accuses this bot of fathering a child."""
+    if not _PATERNITY_RE.search(content):
+        return False
+    if _BOT_REFERENCE_RE.search(content):
+        return True
+    return bot_user_id is not None and (
+        f"<@{bot_user_id}>" in content or f"<@!{bot_user_id}>" in content
+    )
+
+
+async def _maybe_paternity_quip(
+    bot: MatrimonyBot, message: discord.Message
+) -> None:
+    """Reply with a random denial when someone accuses the bot of fatherhood."""
+    if not bot.should_process(message):
+        return
+    bot_id = bot.user.id if bot.user is not None else None
+    if not _paternity_accusation(message.content, bot_id):
+        return
+    prefix = bot.config.default_prefix
+    if message.guild is not None:
+        prefix = bot.store.get_prefix(message.guild.id) or prefix
+    quip = random.choice(_PATERNITY_QUIPS).format(
+        prefix=prefix, cmd=bot.config.command_name
+    )
+    await message.reply(embed=_embed(quip))
+
+
+# ---------------------------------------------------------------------------
 # Meta
 # ---------------------------------------------------------------------------
 
@@ -904,6 +961,11 @@ class MatrCog(commands.Cog):
         self.bot = bot
         matr.name = bot.config.command_name
         bot.add_command(matr)
+
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message) -> None:
+        """Easter egg: the bot denies all paternity suits."""
+        await _maybe_paternity_quip(self.bot, message)
 
     @commands.Cog.listener()
     async def on_command_error(
