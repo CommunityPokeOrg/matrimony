@@ -189,6 +189,15 @@ class Store:
             self._conn.commit()
             return cur.rowcount > 0
 
+    def partnership_since(self, user_x: int, user_y: int) -> int | None:
+        """Unix timestamp the pair married, or None if not partners."""
+        a, b = sorted((user_x, user_y))
+        row = self._row(
+            "SELECT created_at FROM partners WHERE user_a = ? AND user_b = ?",
+            (a, b),
+        )
+        return row[0] if row else None
+
     def partners_of(self, user_id: int) -> list[int]:
         rows = self._rows(
             "SELECT user_a, user_b FROM partners WHERE user_a = ? OR user_b = ?",

@@ -8,8 +8,12 @@ configured command name) and owns the error handler.
 from __future__ import annotations
 
 import hashlib
+import itertools
+import random
+import time
 
 import discord
+from discord import app_commands
 from discord.ext import commands
 
 from .. import __version__
@@ -106,6 +110,126 @@ PROPOSAL_VERBS = {
     "adopt": "adopt",
     "makeparent": "become the parent of",
 }
+
+
+# ---------------------------------------------------------------------------
+# Bot-directed quips
+# ---------------------------------------------------------------------------
+
+# Commands aimed at the bot itself keep their normal response, with a rotating
+# quip appended as Discord subtext (a `-# ` line) underneath it.
+_BOT_QUIPS: dict[str, list[str]] = {
+    "marry": [
+        "sorry, taken by discord.py",
+        "already engaged to the event loop",
+        "committed to a different cog",
+        "the bot's heart belongs to asyncio",
+    ],
+    "adopt": [
+        "the bot already has a parent: its developer",
+        "adoption denied: raised by pip and a rolling release",
+    ],
+    "makeparent": [
+        "the bot's family tree is a linked list of depth 1",
+        "it takes a village to raise a bot, and the village is cogs",
+    ],
+    "hug": [
+        "hug received, internal temperature +0.5C",
+        "the bot compresses the hug into 24 bytes and keeps it forever",
+    ],
+    "cuddle": [
+        "the bot folds itself into a servable position",
+        "cuddle registered, uptime extended by sheer happiness",
+    ],
+    "kiss": [
+        "kiss.exe returned status 418: I'm a teapot",
+        "the bot blushes in #FF69B4",
+    ],
+    "pat": [
+        "headpat registered, servo motors purring",
+        "pat acknowledged, self-esteem module +1",
+    ],
+    "poke": [
+        "poke detected, retaliating with ICMP echo",
+        "ow. the bot files a gentle bug report",
+    ],
+    "wave": [
+        "waves back at 2.4GHz",
+        "wave returned with 0% packet loss",
+    ],
+    "lick": [
+        "the bot is not edible, but appreciates the sentiment",
+        "lick logged with severity: blushing",
+    ],
+    "nom": [
+        "nom rejected: the bot is 100% recycled electrons",
+        "the bot appreciates being seen as a snacc",
+    ],
+    "tickle": [
+        "HA. HA. HA. (laughter module v1.2 engaged)",
+        "tickle detected, giggling buffer overflow",
+    ],
+    "highfive": [
+        "high five returned at 120fps",
+        "up high: confirmed",
+    ],
+    "handhold": [
+        "hand holding protocol engaged, fingers interlocked",
+        "handhold accepted, no handshake errors",
+    ],
+    "slap": [
+        "slap acknowledged, filing a bug report",
+        "ow. rolling back to previous firmware",
+    ],
+    "punch": [
+        "punch parried by 8 layers of abstraction",
+        "contact made, chassis integrity 99%",
+    ],
+    "bite": [
+        "bite deflected by ECC memory",
+        "the bot is crunchy outside, buffering inside",
+    ],
+    "stab": [
+        "stab absorbed by soft-ware",
+        "critical hit deflected to /dev/null",
+    ],
+    "ship": [
+        "shipping forecast: stormy with a chance of discord.py",
+        "the bot ships itself with the nearest wall socket",
+    ],
+    "flirt": [
+        "flirt received, charisma check failed anyway",
+        "the bot files that under 'endearing'",
+    ],
+    "date": [
+        "the bot's idea of a date is ISO-8601 compliant",
+        "reservation confirmed: table for two plus one webhook",
+    ],
+}
+
+_QUIP_CYCLES: dict[str, itertools.cycle] = {}
+
+
+def _quip(kind: str) -> str:
+    """Next quip in the rotation for ``kind``."""
+    if kind not in _QUIP_CYCLES:
+        _QUIP_CYCLES[kind] = itertools.cycle(_BOT_QUIPS[kind])
+    return next(_QUIP_CYCLES[kind])
+
+
+def _is_matrimony(ctx: commands.Context, user: discord.User) -> bool:
+    """Whether ``user`` is this bot itself."""
+    bot_user = _bot(ctx).user
+    return bot_user is not None and user.id == bot_user.id
+
+
+def _quipped(
+    ctx: commands.Context, user: discord.User, text: str, kind: str
+) -> str:
+    """Append a subtext quip when ``user`` is the bot itself."""
+    if _is_matrimony(ctx, user):
+        return f"{text}\n-# {_quip(kind)}"
+    return text
 
 
 class ProposalView(discord.ui.View):
@@ -325,10 +449,18 @@ async def _send_proposal(
     error: str | None,
 ) -> None:
     """Shared entry for marry/adopt/makeparent."""
+    bot = _bot(ctx)
+    if bot.user is not None and target.id == bot.user.id:
+        await _say(
+            ctx,
+            f"Matrimony reviews your request to {PROPOSAL_VERBS[kind]} "
+            f"them... and declines.\n-# {_quip(kind)}",
+            ok=False,
+        )
+        return
     if error:
         await _say(ctx, error, ok=False)
         return
-    bot = _bot(ctx)
     proposal = bot.store.create_proposal(
         ctx.guild.id if ctx.guild else 0,
         ctx.channel.id,
@@ -426,7 +558,8 @@ def _help_embed(prefix: str, cmd: str) -> discord.Embed:
             "**Fun**\n"
             "`hug`/`cuddle`/`kiss`/`pat`/`poke`/`wave`/`lick`/`nom`\n"
             "`tickle`/`highfive`/`handhold`/`slap`/`punch`/`bite`/`stab "
-            "@user` - `ship @a @b`\n"
+            "@user` - `ship @a @b` - `flirt @user` - `date @user` - "
+            "`anniversary [@partner]`\n"
             "**Meta**\n"
             "`info` - `invite` - `stats`\n\n"
             "Family trees are global across servers, and bot accounts can "
@@ -443,10 +576,11 @@ def _help_embed(prefix: str, cmd: str) -> discord.Embed:
 # ---------------------------------------------------------------------------
 
 
-@commands.group(
+@commands.hybrid_group(
     name="matr",
     invoke_without_command=True,
     help="Matrimony family-tree commands.",
+    description="Matrimony family-tree commands.",
 )
 async def matr(ctx: commands.Context) -> None:
     """Bare ``!matr`` shows help."""
@@ -456,8 +590,18 @@ async def matr(ctx: commands.Context) -> None:
     )
 
 
+# Discord caps a slash-command group at 25 children and this cog has ~50,
+# so the group's app_command is detached while the hybrid subcommands
+# below register: HybridGroup.add_command skips the slash side when it is
+# None, leaving each HybridAppCommand standalone. The real /matr slash
+# tree - split across subgroups - is assembled at the end of the file.
+_matr_app_group = matr.app_command
+matr.app_command = None
+
+
 @matr.command(name="help")
 async def matr_help(ctx: commands.Context) -> None:
+    """Show the command list."""
     bot = _bot(ctx)
     await ctx.reply(
         embed=_help_embed(ctx.prefix or "!", bot.config.command_name)
@@ -471,6 +615,7 @@ async def matr_help(ctx: commands.Context) -> None:
 
 @matr.command(name="marry", aliases=["propose"])
 @commands.guild_only()
+@app_commands.guild_only()
 async def matr_marry(ctx: commands.Context, user: discord.User) -> None:
     """Propose marriage to another user - or bot."""
     bot = _bot(ctx)
@@ -485,6 +630,7 @@ async def matr_marry(ctx: commands.Context, user: discord.User) -> None:
 
 @matr.command(name="divorce")
 @commands.guild_only()
+@app_commands.guild_only()
 async def matr_divorce(
     ctx: commands.Context, user: discord.User | None = None
 ) -> None:
@@ -590,6 +736,7 @@ async def matr_partners(
 
 @matr.command(name="adopt")
 @commands.guild_only()
+@app_commands.guild_only()
 async def matr_adopt(ctx: commands.Context, user: discord.User) -> None:
     """Propose adopting a user (or bot) as your child."""
     bot = _bot(ctx)
@@ -604,6 +751,7 @@ async def matr_adopt(ctx: commands.Context, user: discord.User) -> None:
 
 @matr.command(name="makeparent")
 @commands.guild_only()
+@app_commands.guild_only()
 async def matr_makeparent(ctx: commands.Context, user: discord.User) -> None:
     """Ask a user to become YOUR parent."""
     bot = _bot(ctx)
@@ -618,6 +766,7 @@ async def matr_makeparent(ctx: commands.Context, user: discord.User) -> None:
 
 @matr.command(name="disown")
 @commands.guild_only()
+@app_commands.guild_only()
 async def matr_disown(ctx: commands.Context, child: discord.User) -> None:
     """Disown one of your children."""
     bot = _bot(ctx)
@@ -630,6 +779,7 @@ async def matr_disown(ctx: commands.Context, child: discord.User) -> None:
 
 @matr.command(name="disownall")
 @commands.guild_only()
+@app_commands.guild_only()
 async def matr_disownall(ctx: commands.Context) -> None:
     """Disown all of your children at once."""
     bot = _bot(ctx)
@@ -644,6 +794,7 @@ async def matr_disownall(ctx: commands.Context) -> None:
 
 @matr.command(name="emancipate", aliases=["runaway"])
 @commands.guild_only()
+@app_commands.guild_only()
 async def matr_emancipate(ctx: commands.Context) -> None:
     """Remove your parent (run away from home)."""
     bot = _bot(ctx)
@@ -657,6 +808,7 @@ async def matr_emancipate(ctx: commands.Context) -> None:
 
 @matr.command(name="abandon")
 @commands.guild_only()
+@app_commands.guild_only()
 async def matr_abandon(ctx: commands.Context) -> None:
     """Remove ALL your family ties: partners, parent and children."""
     bot = _bot(ctx)
@@ -833,6 +985,7 @@ async def matr_blocked(ctx: commands.Context) -> None:
 
 @matr.command(name="prefix")
 @commands.guild_only()
+@app_commands.guild_only()
 async def matr_prefix(ctx: commands.Context, new_prefix: str | None = None) -> None:
     """Show or set this server's command prefix (default ``!``).
 
@@ -868,7 +1021,9 @@ async def matr_prefix(ctx: commands.Context, new_prefix: str | None = None) -> N
 
 @matr.command(name="incest")
 @commands.guild_only()
+@app_commands.guild_only()
 @commands.has_permissions(manage_guild=True)
+@app_commands.default_permissions(manage_guild=True)
 async def matr_incest(ctx: commands.Context) -> None:
     """Toggle whether family members may marry/adopt each other here."""
     bot = _bot(ctx)
@@ -889,7 +1044,9 @@ async def matr_incest(ctx: commands.Context) -> None:
 
 @matr.command(name="forcemarry")
 @commands.guild_only()
+@app_commands.guild_only()
 @commands.has_permissions(manage_guild=True)
+@app_commands.default_permissions(manage_guild=True)
 async def matr_forcemarry(
     ctx: commands.Context, a: discord.User, b: discord.User
 ) -> None:
@@ -907,7 +1064,9 @@ async def matr_forcemarry(
 
 @matr.command(name="forcedivorce")
 @commands.guild_only()
+@app_commands.guild_only()
 @commands.has_permissions(manage_guild=True)
+@app_commands.default_permissions(manage_guild=True)
 async def matr_forcedivorce(
     ctx: commands.Context, a: discord.User, b: discord.User | None = None
 ) -> None:
@@ -930,7 +1089,9 @@ async def matr_forcedivorce(
 
 @matr.command(name="forceadopt")
 @commands.guild_only()
+@app_commands.guild_only()
 @commands.has_permissions(manage_guild=True)
+@app_commands.default_permissions(manage_guild=True)
 async def matr_forceadopt(
     ctx: commands.Context, parent: discord.User, child: discord.User
 ) -> None:
@@ -960,7 +1121,9 @@ async def matr_forceadopt(
 
 @matr.command(name="forceemancipate")
 @commands.guild_only()
+@app_commands.guild_only()
 @commands.has_permissions(manage_guild=True)
+@app_commands.default_permissions(manage_guild=True)
 async def matr_forceemancipate(ctx: commands.Context, child: discord.User) -> None:
     """Force-remove a user's parent."""
     bot = _bot(ctx)
@@ -1001,21 +1164,18 @@ _FUN_VERBS = {
 def _make_fun(name: str) -> None:
     verb, emoji, gif_type = _FUN_VERBS[name]
 
-    @matr.command(name=name)
     async def _fun(ctx: commands.Context, user: discord.User) -> None:
         gif = await _bot(ctx).gifs.fetch_url(gif_type)
         if user.id == ctx.author.id:
-            await _say(
-                ctx, f"You {verb} yourself. Okay then. {emoji}", image=gif
-            )
+            text = f"You {verb} yourself. Okay then. {emoji}"
         else:
-            await _say(
-                ctx,
-                f"{ctx.author.mention} {verb} {user.mention}! {emoji}",
-                image=gif,
-            )
+            text = f"{ctx.author.mention} {verb} {user.mention}! {emoji}"
+        await _say(ctx, _quipped(ctx, user, text, name), image=gif)
 
     _fun.__doc__ = f"{name.capitalize()} another user."
+    # Set the docstring before decorating so the slash command gets a
+    # description too.
+    matr.command(name=name)(_fun)
 
 
 for _verb_name in _FUN_VERBS:
@@ -1031,8 +1191,115 @@ async def matr_ship(
     lo, hi = sorted((a.id, b.id))
     pct = int(hashlib.md5(f"{lo}:{hi}".encode()).hexdigest()[:6], 16) % 101
     gif = await _bot(ctx).gifs.fetch_url("handhold")
+    text = f"{a.mention} x {b.mention}: **{pct}%** :heart:"
+    if _is_matrimony(ctx, a) or _is_matrimony(ctx, b):
+        text += f"\n-# {_quip('ship')}"
+    await _say(ctx, text, image=gif)
+
+
+_PICKUP_LINES = (
+    "Are you a prefix? Because everything I say starts with you.",
+    "Are you a rate limit? Because you leave me wanting more.",
+    "Is your name Wi-Fi? Because I'm feeling a connection.",
+    "Are you a pending proposal? I've been thinking about you for "
+    "300 seconds.",
+    "You must be a family tree, because I keep branching toward you.",
+    "Are you a migration? Because my schema changed when I saw you.",
+    "If you were a discord.py update, I'd pin you immediately.",
+    "Are you an embed? Because you look great in my timeline.",
+)
+
+_DATE_IDEAS = (
+    "to a candlelit debugging session, bugs provided free of charge",
+    "stargazing at the voice channel member list",
+    "to split one RAM upgrade, romantically",
+    "on a couples' refactor: you hold the TODOs, they hold your heart",
+    "to the edge of the render distance and back",
+    "for a slow scroll through each other's pinned messages",
+    "to dinner in the guild's AFK channel, it's quiet there",
+)
+
+
+@matr.command(name="flirt", aliases=["rizz"])
+async def matr_flirt(ctx: commands.Context, user: discord.User) -> None:
+    """Drop a terrible pickup line on someone."""
+    bot = _bot(ctx)
+    line = random.choice(_PICKUP_LINES)
+    gif = await bot.gifs.fetch_url("wink")
+    text = f"{ctx.author.mention} to {user.mention}: *{line}*"
+    await _say(ctx, _quipped(ctx, user, text, "flirt"), image=gif)
+
+
+@matr.command(name="date", aliases=["dateidea"])
+async def matr_date(ctx: commands.Context, user: discord.User) -> None:
+    """Invent a terrible date for you and someone."""
+    bot = _bot(ctx)
+    idea = random.choice(_DATE_IDEAS)
+    gif = await bot.gifs.fetch_url("hug")
+    text = f"{ctx.author.mention} takes {user.mention} {idea}."
+    await _say(ctx, _quipped(ctx, user, text, "date"), image=gif)
+
+
+def _fmt_duration(seconds: float) -> str:
+    s = int(seconds)
+    days, s = divmod(s, 86400)
+    hours, s = divmod(s, 3600)
+    minutes, s = divmod(s, 60)
+    if days:
+        return f"{days}d {hours}h"
+    if hours:
+        return f"{hours}h {minutes}m"
+    if minutes:
+        return f"{minutes}m {s}s"
+    return f"{s}s"
+
+
+def _anniversary_note(seconds: float) -> str:
+    if seconds < 300:
+        return "The paperwork is still warm."
+    if seconds < 86400:
+        return "Still in the honeymoon phase."
+    if seconds < 30 * 86400:
+        return "Past the paper anniversary, into cardboard territory."
+    if seconds < 365 * 86400:
+        return "A love story for the ages, verified by SQLite."
+    return "SQLite remembers. So should you."
+
+
+@matr.command(name="anniversary", aliases=["anniv"])
+async def matr_anniversary(
+    ctx: commands.Context, user: discord.User | None = None
+) -> None:
+    """How long you've been married to a partner."""
+    bot = _bot(ctx)
+    partners = bot.store.partners_of(ctx.author.id)
+    if user is None:
+        if len(partners) == 1:
+            target = partners[0]
+        elif not partners:
+            await _say(ctx, "You're not married to anyone.", ok=False)
+            return
+        else:
+            await _say(
+                ctx,
+                "You have multiple partners - mention which one's "
+                "anniversary you want.",
+                ok=False,
+            )
+            return
+    else:
+        target = user.id
+    since = bot.store.partnership_since(ctx.author.id, target)
+    if since is None:
+        await _say(ctx, "You're not married to them.", ok=False)
+        return
+    elapsed = time.time() - since
+    gif = await bot.gifs.fetch_url("kiss")
     await _say(
-        ctx, f"{a.mention} x {b.mention}: **{pct}%** :heart:", image=gif
+        ctx,
+        f"{ctx.author.mention} and <@{target}> have been married for "
+        f"**{_fmt_duration(elapsed)}**. {_anniversary_note(elapsed)}",
+        image=gif,
     )
 
 
@@ -1104,10 +1371,93 @@ async def matr_stats(ctx: commands.Context) -> None:
 # ---------------------------------------------------------------------------
 
 
+# Slash layout for /matr: the core family commands live directly under the
+# group, and the rest go into one-level subgroups so no group exceeds
+# Discord's 25-child limit.
+_TOP_APP_COMMANDS = (
+    "marry",
+    "divorce",
+    "accept",
+    "decline",
+    "partners",
+    "anniversary",
+    "adopt",
+    "makeparent",
+    "disown",
+    "disownall",
+    "emancipate",
+    "abandon",
+    "tree",
+    "fulltree",
+    "parent",
+    "children",
+    "siblings",
+    "familysize",
+    "relationship",
+    "block",
+    "unblock",
+    "blocked",
+)
+
+_APP_SUBGROUPS = (
+    (
+        "fun",
+        "Gifs, quips and other silliness.",
+        (
+            "hug",
+            "cuddle",
+            "kiss",
+            "pat",
+            "poke",
+            "wave",
+            "lick",
+            "nom",
+            "tickle",
+            "highfive",
+            "handhold",
+            "slap",
+            "punch",
+            "bite",
+            "stab",
+            "ship",
+            "flirt",
+            "date",
+        ),
+    ),
+    (
+        "admin",
+        "Server admin commands.",
+        (
+            "prefix",
+            "incest",
+            "forcemarry",
+            "forcedivorce",
+            "forceadopt",
+            "forceemancipate",
+        ),
+    ),
+    (
+        "meta",
+        "Bot information commands.",
+        ("help", "info", "invite", "stats"),
+    ),
+)
+
+matr.app_command = _matr_app_group
+for _name in _TOP_APP_COMMANDS:
+    _matr_app_group.add_command(matr.get_command(_name).app_command)
+for _sub_name, _sub_desc, _sub_commands in _APP_SUBGROUPS:
+    _sub = app_commands.Group(name=_sub_name, description=_sub_desc)
+    for _name in _sub_commands:
+        _sub.add_command(matr.get_command(_name).app_command)
+    _matr_app_group.add_command(_sub)
+
+
 class MatrCog(commands.Cog):
     def __init__(self, bot: MatrimonyBot) -> None:
         self.bot = bot
         matr.name = bot.config.command_name
+        matr.app_command.name = bot.config.command_name
         bot.add_command(matr)
 
     @commands.Cog.listener()
