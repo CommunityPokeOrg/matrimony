@@ -14,7 +14,10 @@ All commands live under one group, `matr`, invoked with a per-guild prefix
 ## Features
 
 - **Marriages** — propose, accept/decline (buttons *or* text commands),
-  divorce, multiple simultaneous partners.
+  divorce, multiple simultaneous partners. When a married user takes
+  another partner, every existing partner (of *both* spouses) is notified
+  and can **accept** (acknowledge the arrangement) or **divorce** on the
+  spot — the new marriage stands either way.
 - **Parentage** — `adopt` (they become your child) and `makeparent` (they
   become your parent), `disown`, `disownall`, `emancipate`/`runaway`,
   `abandon` (wipe your whole family).
@@ -62,9 +65,9 @@ explicitly supports bot-authored commands and bot targets:
 | Command | Description |
 | --- | --- |
 | `!matr help` | Show the command list |
-| `!matr marry @user` | Propose to a user or bot |
+| `!matr marry @user` | Propose to a user or bot (existing partners get an accept/divorce notice) |
 | `!matr divorce [@user]` | Divorce a partner (required if you have several) |
-| `!matr accept [@proposer]` / `decline` | Answer a pending proposal |
+| `!matr accept [@proposer]` / `decline` | Answer a pending proposal — `accept` also acknowledges partner notices |
 | `!matr partners [@user]` | List partners |
 | `!matr adopt @user` | Ask to adopt a user as your child |
 | `!matr makeparent @user` | Ask a user to become your parent |
@@ -171,12 +174,19 @@ Matrimony replicates the original's mechanics as closely as is practical
 - **One parent per child**, matching upstream's single-parent tree model.
 - Proposals need the target's consent (upstream uses buttons; Matrimony
   supports buttons *and* `accept`/`decline` text commands, which also lets
-  non-UI bots respond).
+  non-UI bots respond). The marriage forms the moment the target accepts —
+  existing partners of either spouse are then notified and may acknowledge
+  or immediately divorce their own partner.
 - `incest` is a per-guild admin toggle, off by default.
 - No partner limit by default (upstream allows polygamy; caps are
   configurable here).
 
 **Known divergences:**
+
+- Upstream has no equivalent of Matrimony's partner notices: when a user
+  marries someone new, each existing partner of both spouses gets an
+  accept/divorce prompt (buttons or `accept`/`divorce` text commands).
+  Accepting is purely an acknowledgement; it never blocks the marriage.
 
 - Upstream renders trees as Graphviz images; Matrimony renders inline text
   trees (no Graphviz dependency, works in DMs and on lightweight hosts).

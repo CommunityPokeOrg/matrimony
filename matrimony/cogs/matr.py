@@ -14,7 +14,7 @@ from discord.ext import commands
 
 from .. import __version__
 from ..bot import MatrimonyBot
-from ..store import Proposal
+from ..store import Notice, Proposal
 
 GREEN = discord.Color(0x2ECC71)
 RED = discord.Color(0xE74C3C)
@@ -78,6 +78,23 @@ async def _respond(
             await ctx_or_interaction.response.send_message(embed=emb)
     else:
         await ctx_or_interaction.reply(embed=emb)
+
+
+async def _post(
+    ctx_or_interaction,
+    embed: discord.Embed,
+    view: discord.ui.View | None = None,
+) -> None:
+    """Post a standalone message (with optional view) to the channel."""
+    if isinstance(ctx_or_interaction, discord.Interaction):
+        if ctx_or_interaction.response.is_done():
+            await ctx_or_interaction.followup.send(embed=embed, view=view)
+        else:
+            await ctx_or_interaction.response.send_message(
+                embed=embed, view=view
+            )
+    else:
+        await ctx_or_interaction.send(embed=embed, view=view)
 
 
 # ---------------------------------------------------------------------------
@@ -154,6 +171,14 @@ async def _enact(bot: MatrimonyBot, proposal: Proposal, ctx_or_int) -> None:
             True,
             image=gif,
         )
+        await _notify_new_partners(
+            bot,
+            ctx_or_int,
+            proposal.proposer,
+            proposal.target,
+            proposal.guild_id,
+            proposal.channel_id,
+        )
     elif proposal.kind == "adopt":
         # proposer adopts target as their child
         if bot.store.add_child(proposal.proposer, proposal.target):
@@ -170,6 +195,127 @@ async def _enact(bot: MatrimonyBot, proposal: Proposal, ctx_or_int) -> None:
             )
         else:
             await _respond(ctx_or_int, "They already have a parent.", False)
+
+
+# ---------------------------------------------------------------------------
+# Partner notices
+# ---------------------------------------------------------------------------
+
+# Notices don't block anything, so they get a generous button window; after
+# the view times out the text commands (`accept` / `divorce`) still work.
+NOTICE_VIEW_TIMEOUT = 60 * 60 * 24  # 24 hours
+
+
+class PartnerNoticeView(discord.ui.View):
+    """Accept/divorce buttons attached to a new-partner notice."""
+
+    def __init__(self, notice_id: int, timeout: float = NOTICE_VIEW_TIMEOUT) -> None:
+        super().__init__(timeout=timeout)
+        self.notice_id = notice_id
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        notice = interaction.client.store.get_notice(self.notice_id)
+        if notice is None or interaction.user.id != notice.user_id:
+            await interaction.response.send_message(
+                "This notice isn't for you.", ephemeral=True
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="Accept", style=discord.ButtonStyle.success)
+    async def accept(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        await _resolve_notice(
+            interaction.client, interaction, self.notice_id, accepted=True
+        )
+        self.stop()
+
+    @discord.ui.button(label="Divorce", style=discord.ButtonStyle.danger)
+    async def divorce(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        await _resolve_notice(
+            interaction.client, interaction, self.notice_id, accepted=False
+        )
+        self.stop()
+
+
+async def _resolve_notice(
+    bot: MatrimonyBot, ctx_or_interaction, notice_id: int, *, accepted: bool
+) -> bool:
+    """Answer a partner notice. Returns False if it no longer exists.
+
+    Accepting just acknowledges the new arrangement; the divorce option
+    ends the notified partner's own marriage via the normal divorce path.
+    """
+    notice = bot.store.get_notice(notice_id)
+    if notice is None:
+        await _respond(ctx_or_interaction, "That notice is no longer valid.", False)
+        return False
+    bot.store.delete_notice(notice_id)
+    if accepted:
+        await _respond(
+            ctx_or_interaction,
+            f"Acknowledged - you're still married to <@{notice.spouse_id}>.",
+            True,
+        )
+        return True
+    if bot.store.remove_partners(notice.user_id, notice.spouse_id):
+        gif = await bot.gifs.fetch_url("cry")
+        await _respond(
+            ctx_or_interaction,
+            f"<@{notice.user_id}> and <@{notice.spouse_id}> are now divorced. "
+            ":broken_heart:",
+            True,
+            image=gif,
+        )
+    else:
+        await _respond(
+            ctx_or_interaction, "You're no longer married to them.", False
+        )
+    return True
+
+
+async def _notify_new_partners(
+    bot: MatrimonyBot,
+    ctx_or_interaction,
+    user_a: int,
+    user_b: int,
+    guild_id: int,
+    channel_id: int,
+) -> None:
+    """Tell each existing partner of a newly-married pair about it.
+
+    Every partner of ``user_a`` or ``user_b`` (other than each other) gets
+    a notice with accept/divorce options. The marriage stands either way -
+    the notice only gives existing partners a one-click divorce or an
+    acknowledgement.
+    """
+    prefix = (
+        getattr(ctx_or_interaction, "prefix", None)
+        or bot.config.default_prefix
+    )
+    cmd = bot.config.command_name
+    for spouse_id, other_id in ((user_a, user_b), (user_b, user_a)):
+        for partner_id in bot.store.partners_of(spouse_id):
+            if partner_id in (user_a, user_b):
+                continue
+            notice = bot.store.create_notice(
+                guild_id, channel_id, partner_id, spouse_id, other_id
+            )
+            await _post(
+                ctx_or_interaction,
+                _embed(
+                    f"<@{partner_id}>: your partner <@{spouse_id}> also "
+                    f"married <@{other_id}>! Accept the new arrangement or "
+                    f"divorce <@{spouse_id}> - buttons below, or "
+                    f"`{prefix}{cmd} accept` / `{prefix}{cmd} divorce "
+                    f"<@{spouse_id}>`.",
+                    GOLD,
+                ),
+                PartnerNoticeView(notice.id),
+            )
 
 
 async def _send_proposal(
@@ -196,37 +342,61 @@ async def _send_proposal(
         return
     verb = PROPOSAL_VERBS[kind]
     cmd = bot.config.command_name
+    notice_line = ""
+    if kind == "marry":
+        others = sorted(
+            set(bot.store.partners_of(ctx.author.id))
+            | set(bot.store.partners_of(target.id))
+        )
+        if others:
+            notice_line = (
+                "\nExisting partners "
+                + ", ".join(f"<@{p}>" for p in others)
+                + " will be notified and may accept or divorce."
+            )
     await ctx.reply(
         embed=_embed(
             f"{ctx.author.mention} wants to {verb} {target.mention}!\n"
             f"Accept with the buttons below or `{ctx.prefix}{cmd} accept "
             f"{ctx.author.mention}` (decline likewise). Proposals expire "
-            f"after {bot.config.proposal_ttl_seconds // 60} minutes.",
+            f"after {bot.config.proposal_ttl_seconds // 60} minutes."
+            f"{notice_line}",
             GOLD,
         ),
         view=ProposalView(proposal, timeout=bot.config.proposal_ttl_seconds),
     )
 
 
-async def _pick_proposal(
+def _item_matches(item: Proposal | Notice, user_id: int) -> bool:
+    """Whether an explicit ``@user`` argument selects this pending item."""
+    if isinstance(item, Proposal):
+        return item.proposer == user_id
+    return user_id in (item.spouse_id, item.other_id)
+
+
+async def _pick_answerable(
     ctx: commands.Context, proposer: discord.User | None
-) -> Proposal | None:
-    """Find the proposal ``ctx.author`` wants to act on."""
-    pending = _bot(ctx).store.proposals_for(ctx.author.id)
+) -> Proposal | Notice | None:
+    """Find the proposal or partner notice ``ctx.author`` wants to answer."""
+    bot = _bot(ctx)
+    items: list[Proposal | Notice] = (
+        bot.store.proposals_for(ctx.author.id)
+        + bot.store.notices_for(ctx.author.id)
+    )
     if proposer is not None:
-        pending = [p for p in pending if p.proposer == proposer.id]
-    if not pending:
-        await _say(ctx, "You have no pending proposals to answer.", ok=False)
+        items = [it for it in items if _item_matches(it, proposer.id)]
+    if not items:
+        await _say(ctx, "You have nothing pending to answer.", ok=False)
         return None
-    if len(pending) > 1:
+    if len(items) > 1:
         await _say(
             ctx,
-            "You have multiple pending proposals - mention the proposer to "
-            "pick one.",
+            "You have multiple pending proposals/notices - mention the "
+            "proposer or your partner to pick one.",
             ok=False,
         )
         return None
-    return pending[0]
+    return items[0]
 
 
 def _help_embed(prefix: str, cmd: str) -> discord.Embed:
@@ -238,6 +408,8 @@ def _help_embed(prefix: str, cmd: str) -> discord.Embed:
             "**Love**\n"
             "`marry @user` propose - `divorce [@user]` - "
             "`accept`/`decline [@user]` - `partners [@user]`\n"
+            "*(marrying notifies existing partners, who can accept or "
+            "divorce)*\n"
             "**Parentage**\n"
             "`adopt @user` - `makeparent @user` - `disown @child` - "
             "`disownall` - `emancipate` - `abandon`\n"
@@ -258,7 +430,9 @@ def _help_embed(prefix: str, cmd: str) -> discord.Embed:
             "**Meta**\n"
             "`info` - `invite` - `stats`\n\n"
             "Family trees are global across servers, and bot accounts can "
-            "use commands and be married or adopted."
+            "use commands and be married or adopted. Users may have multiple "
+            "partners; existing partners are notified of each new marriage "
+            "and may acknowledge it or divorce on the spot."
         ),
         colour=GOLD,
     )
@@ -349,10 +523,12 @@ async def matr_divorce(
 async def matr_accept(
     ctx: commands.Context, proposer: discord.User | None = None
 ) -> None:
-    """Accept a pending proposal (usable in DMs)."""
-    proposal = await _pick_proposal(ctx, proposer)
-    if proposal:
-        await _resolve_proposal(_bot(ctx), ctx, proposal.id, accepted=True)
+    """Accept a pending proposal or partner notice (usable in DMs)."""
+    item = await _pick_answerable(ctx, proposer)
+    if isinstance(item, Proposal):
+        await _resolve_proposal(_bot(ctx), ctx, item.id, accepted=True)
+    elif isinstance(item, Notice):
+        await _resolve_notice(_bot(ctx), ctx, item.id, accepted=True)
 
 
 @matr.command(name="decline", aliases=["deny"])
@@ -360,9 +536,34 @@ async def matr_decline(
     ctx: commands.Context, proposer: discord.User | None = None
 ) -> None:
     """Decline a pending proposal."""
-    proposal = await _pick_proposal(ctx, proposer)
-    if proposal:
-        await _resolve_proposal(_bot(ctx), ctx, proposal.id, accepted=False)
+    bot = _bot(ctx)
+    pending = bot.store.proposals_for(ctx.author.id)
+    if proposer is not None:
+        pending = [p for p in pending if p.proposer == proposer.id]
+    if not pending:
+        if bot.store.notices_for(ctx.author.id):
+            cmd = bot.config.command_name
+            await _say(
+                ctx,
+                "No proposals to decline - but you have a new-partner notice. "
+                f"Acknowledge it with `{ctx.prefix}{cmd} accept` or leave "
+                f"the marriage with `{ctx.prefix}{cmd} divorce @partner`.",
+                ok=False,
+            )
+        else:
+            await _say(
+                ctx, "You have no pending proposals to answer.", ok=False
+            )
+        return
+    if len(pending) > 1:
+        await _say(
+            ctx,
+            "You have multiple pending proposals - mention the proposer to "
+            "pick one.",
+            ok=False,
+        )
+        return
+    await _resolve_proposal(bot, ctx, pending[0].id, accepted=False)
 
 
 @matr.command(name="partners", aliases=["spouse", "spouses", "partner"])
@@ -699,6 +900,9 @@ async def matr_forcemarry(
         return
     bot.store.add_partners(a.id, b.id)
     await _say(ctx, f"{a.mention} and {b.mention} are now married. :tada:")
+    await _notify_new_partners(
+        bot, ctx, a.id, b.id, ctx.guild.id, ctx.channel.id
+    )
 
 
 @matr.command(name="forcedivorce")
@@ -888,7 +1092,8 @@ async def matr_stats(ctx: commands.Context) -> None:
                 f"Guilds: **{len(bot.guilds)}**\n"
                 f"Marriages: **{s['marriages']}**\n"
                 f"Parent-child links: **{s['parent_child_links']}**\n"
-                f"Open proposals: **{s['open_proposals']}**"
+                f"Open proposals: **{s['open_proposals']}**\n"
+                f"Partner notices: **{s['partner_notices']}**"
             ),
         )
     )
