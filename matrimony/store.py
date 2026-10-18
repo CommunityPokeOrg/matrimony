@@ -2,8 +2,10 @@
 
 Family relationships are *global* (cross-server), matching the original
 MarriageBot design where family trees span every guild the bot is in.
-Guild-scoped data is limited to per-guild settings (prefix, incest toggle)
-and the guild/channel a proposal was made in.
+Guild-scoped data is limited to per-guild settings (prefix, incest toggle),
+the guild/channel a proposal was made in, and partner notices - the
+"your partner married someone new" alerts existing partners can accept
+(acknowledge) or answer with a divorce.
 """
 
 from __future__ import annotations
@@ -51,6 +53,16 @@ CREATE TABLE IF NOT EXISTS blocks (
     blocked INTEGER NOT NULL,
     PRIMARY KEY (blocker, blocked)
 );
+
+CREATE TABLE IF NOT EXISTS notices (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id   INTEGER NOT NULL,
+    channel_id INTEGER NOT NULL,
+    user_id    INTEGER NOT NULL,
+    spouse_id  INTEGER NOT NULL,
+    other_id   INTEGER NOT NULL,
+    created_at INTEGER NOT NULL
+);
 """
 
 
@@ -64,6 +76,26 @@ class Proposal:
     kind: str  # 'marry' | 'adopt' | 'makeparent'
     created_at: int
     expires_at: int
+
+
+@dataclass(frozen=True)
+class Notice:
+    """A "your partner married someone new" notification.
+
+    ``user_id`` is the existing partner being told; ``spouse_id`` is their
+    partner who just formed another marriage; ``other_id`` is the new
+    spouse. Notices never block anything: accepting simply acknowledges
+    the arrangement, and the divorce option dissolves ``user_id``'s own
+    marriage to ``spouse_id``.
+    """
+
+    id: int
+    guild_id: int
+    channel_id: int
+    user_id: int
+    spouse_id: int
+    other_id: int
+    created_at: int
 
 
 class Store:
@@ -148,8 +180,23 @@ class Store:
             cur = self._conn.execute(
                 "DELETE FROM partners WHERE user_a = ? AND user_b = ?", (a, b)
             )
+            # Notices that presume this marriage still exists are now stale.
+            self._conn.execute(
+                "DELETE FROM notices WHERE (user_id = ? AND spouse_id = ?) "
+                "OR (user_id = ? AND spouse_id = ?)",
+                (user_x, user_y, user_y, user_x),
+            )
             self._conn.commit()
             return cur.rowcount > 0
+
+    def partnership_since(self, user_x: int, user_y: int) -> int | None:
+        """Unix timestamp the pair married, or None if not partners."""
+        a, b = sorted((user_x, user_y))
+        row = self._row(
+            "SELECT created_at FROM partners WHERE user_a = ? AND user_b = ?",
+            (a, b),
+        )
+        return row[0] if row else None
 
     def partners_of(self, user_id: int) -> list[int]:
         rows = self._rows(
@@ -270,6 +317,54 @@ class Store:
             self._conn.commit()
             return cur.rowcount
 
+    # --------------------------------------------------------------- notices
+
+    def create_notice(
+        self,
+        guild_id: int,
+        channel_id: int,
+        user_id: int,
+        spouse_id: int,
+        other_id: int,
+    ) -> Notice:
+        now = int(time.time())
+        with self._lock:
+            cur = self._conn.execute(
+                """INSERT INTO notices
+                   (guild_id, channel_id, user_id, spouse_id, other_id,
+                    created_at)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (guild_id, channel_id, user_id, spouse_id, other_id, now),
+            )
+            self._conn.commit()
+            nid = cur.lastrowid
+        return Notice(nid, guild_id, channel_id, user_id, spouse_id,
+                      other_id, now)
+
+    def get_notice(self, notice_id: int) -> Notice | None:
+        row = self._row(
+            "SELECT id, guild_id, channel_id, user_id, spouse_id, other_id, "
+            "created_at FROM notices WHERE id = ?",
+            (notice_id,),
+        )
+        return Notice(*row) if row else None
+
+    def notices_for(self, user_id: int) -> list[Notice]:
+        rows = self._rows(
+            "SELECT id, guild_id, channel_id, user_id, spouse_id, other_id, "
+            "created_at FROM notices WHERE user_id = ?",
+            (user_id,),
+        )
+        return [Notice(*r) for r in rows]
+
+    def delete_notice(self, notice_id: int) -> bool:
+        with self._lock:
+            cur = self._conn.execute(
+                "DELETE FROM notices WHERE id = ?", (notice_id,)
+            )
+            self._conn.commit()
+            return cur.rowcount > 0
+
     # ----------------------------------------------------------------- blocks
 
     def add_block(self, blocker: int, blocked: int) -> None:
@@ -331,6 +426,7 @@ class Store:
             "marriages": count("partners"),
             "parent_child_links": count("children"),
             "open_proposals": count("proposals"),
+            "partner_notices": count("notices"),
             "blocks": count("blocks"),
             "guild_settings": count("guild_settings"),
         }

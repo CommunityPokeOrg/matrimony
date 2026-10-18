@@ -75,6 +75,35 @@ def test_proposals_for_filters(store: Store) -> None:
     assert store.proposals_for(21) == []
 
 
+def test_notice_lifecycle(store: Store) -> None:
+    n = store.create_notice(1, 2, 30, 10, 20)
+    assert n.user_id == 30
+    assert n.spouse_id == 10
+    assert n.other_id == 20
+    assert store.get_notice(n.id) == n
+    assert store.notices_for(30) == [n]
+    assert store.notices_for(31) == []
+
+    assert store.delete_notice(n.id) is True
+    assert store.delete_notice(n.id) is False
+    assert store.get_notice(n.id) is None
+    assert store.notices_for(30) == []
+
+
+def test_notices_cleared_on_divorce(store: Store) -> None:
+    """Notices presume the user/spouse marriage still exists - dissolving it
+    (divorce/abandon/forcedivorce all call remove_partners) clears them."""
+    store.add_partners(10, 20)
+    store.create_notice(1, 2, 10, 20, 30)  # tells 10 that 20 married 30
+    store.create_notice(1, 2, 20, 10, 30)  # and the reverse direction
+    store.create_notice(1, 2, 40, 10, 50)  # unrelated: tells 40 re 10/50
+
+    store.remove_partners(10, 20)
+    assert store.notices_for(10) == []
+    assert store.notices_for(20) == []
+    assert len(store.notices_for(40)) == 1
+
+
 def test_blocks(store: Store) -> None:
     store.add_block(1, 2)
     assert store.is_blocked(1, 2) is True
@@ -115,11 +144,13 @@ def test_stats(store: Store) -> None:
     store.add_partners(1, 2)
     store.add_child(1, 3)
     store.create_proposal(9, 9, 5, 6, "marry", 300)
+    store.create_notice(9, 9, 5, 6, 7)
     store.add_block(7, 8)
     s = store.stats()
     assert s["marriages"] == 1
     assert s["parent_child_links"] == 1
     assert s["open_proposals"] == 1
+    assert s["partner_notices"] == 1
     assert s["blocks"] == 1
 
 

@@ -94,6 +94,10 @@ class MatrimonyBot(commands.Bot):
         for cog in ALL_COGS:
             await self.add_cog(cog(self))
         log.info("Loaded %d cogs", len(ALL_COGS))
+        # Publish the /matr application commands (hybrid commands registered
+        # alongside the prefix group).
+        synced = await self.tree.sync()
+        log.info("Synced %d application command(s)", len(synced))
 
 
 def run() -> None:

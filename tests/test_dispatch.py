@@ -15,7 +15,8 @@ BOT_USER_ID = 999999
 
 
 def make_bot() -> MatrimonyBot:
-    bot = MatrimonyBot(Config(database_path=":memory:"))
+    # No Fluxpoint key: GIF lookups short-circuit instead of hitting the API.
+    bot = MatrimonyBot(Config(database_path=":memory:", fluxpoint_api_key=""))
     MatrCog(bot)
     # Pretend we're logged in as this user id
     bot._connection.user = SimpleNamespace(id=BOT_USER_ID)  # type: ignore[attr-defined]
@@ -48,6 +49,7 @@ def ctx_for(bot: MatrimonyBot, author, guild_id: int = 42):
         channel=SimpleNamespace(id=7),
         prefix="!",
         reply=AsyncMock(),
+        send=AsyncMock(),
         command=None,
     )
 
@@ -170,6 +172,128 @@ def test_proposal_declined_by_bot() -> None:
     run(matr_mod.matr_decline.callback(ctx_for(bot, target), None))
     assert bot.store.partners_of(proposer.id) == []
     assert bot.store.proposals_for(target.id) == []
+
+
+# ---------------------------------------------------------------------------
+# Polyamory: existing partners get an accept/divorce notice on a new marriage
+# ---------------------------------------------------------------------------
+
+
+def _triangle(bot) -> tuple:
+    """a proposes to b, who is already married to c; b accepts."""
+    a, b, c = user(1101), user(1102), user(1103)
+    bot.store.add_partners(b.id, c.id)
+    run(matr_mod.matr_marry.callback(ctx_for(bot, a), b))
+    run(matr_mod.matr_accept.callback(ctx_for(bot, b), None))
+    return a, b, c
+
+
+def test_new_marriage_notifies_existing_partners() -> None:
+    """The marriage forms immediately on the target's accept; the existing
+    partner is merely notified - their answer never blocks it."""
+    bot = make_bot()
+    a, b, c = _triangle(bot)
+    assert sorted(bot.store.partners_of(b.id)) == sorted([a.id, c.id])
+    notices = bot.store.notices_for(c.id)
+    assert len(notices) == 1
+    assert notices[0].spouse_id == b.id
+    assert notices[0].other_id == a.id
+    # The newlyweds themselves get no notice.
+    assert bot.store.notices_for(a.id) == []
+    assert bot.store.notices_for(b.id) == []
+
+
+def test_proposers_partners_also_notified() -> None:
+    """Partners of the proposer are notified too, not just the target's."""
+    bot = make_bot()
+    a, b, d = user(1104), user(1105), user(1106)
+    bot.store.add_partners(a.id, d.id)
+    run(matr_mod.matr_marry.callback(ctx_for(bot, a), b))
+    run(matr_mod.matr_accept.callback(ctx_for(bot, b), None))
+    notices = bot.store.notices_for(d.id)
+    assert len(notices) == 1
+    assert notices[0].spouse_id == a.id
+    assert notices[0].other_id == b.id
+
+
+def test_no_notices_for_first_marriage() -> None:
+    """The single-partner flow is unchanged: no notices when nobody was
+    already married."""
+    bot = make_bot()
+    a, b = user(1107), user(1108)
+    run(matr_mod.matr_marry.callback(ctx_for(bot, a), b))
+    run(matr_mod.matr_accept.callback(ctx_for(bot, b), None))
+    assert bot.store.partners_of(a.id) == [b.id]
+    assert bot.store._row("SELECT COUNT(*) FROM notices")[0] == 0
+
+
+def test_notice_accept_acknowledges() -> None:
+    """`!matr accept` on a notice is acknowledgement only: the existing
+    marriage and the new one both stay."""
+    bot = make_bot()
+    a, b, c = _triangle(bot)
+    run(matr_mod.matr_accept.callback(ctx_for(bot, c), None))
+    assert bot.store.notices_for(c.id) == []
+    assert c.id in bot.store.partners_of(b.id)
+    assert a.id in bot.store.partners_of(b.id)
+
+
+def test_notice_divorce_via_text_command() -> None:
+    """The notice's divorce option maps onto the normal `divorce` command."""
+    bot = make_bot()
+    a, b, c = _triangle(bot)
+    run(matr_mod.matr_divorce.callback(ctx_for(bot, c), b))
+    assert bot.store.partners_of(c.id) == []
+    assert bot.store.partners_of(b.id) == [a.id]
+    # The notice is cleared once the underlying marriage is gone.
+    assert bot.store.notices_for(c.id) == []
+
+
+def test_notice_divorce_via_button_path() -> None:
+    """Same path the Divorce button in PartnerNoticeView calls."""
+    bot = make_bot()
+    a, b, c = _triangle(bot)
+    notice = bot.store.notices_for(c.id)[0]
+    run(
+        matr_mod._resolve_notice(
+            bot, ctx_for(bot, c), notice.id, accepted=False
+        )
+    )
+    assert bot.store.partners_of(c.id) == []
+    assert bot.store.partners_of(b.id) == [a.id]
+    assert bot.store.notices_for(c.id) == []
+
+
+def test_notice_survives_unanswered() -> None:
+    """No answer is required: an ignored notice never undoes the marriage."""
+    bot = make_bot()
+    a, b, c = _triangle(bot)
+    assert c.id in bot.store.partners_of(b.id)
+    assert a.id in bot.store.partners_of(b.id)
+
+
+def test_forcemarry_notifies_existing_partners() -> None:
+    """Force-marriages notify existing partners the same way."""
+    bot = make_bot()
+    admin, a, b, c = user(1201), user(1202), user(1203), user(1204)
+    bot.store.add_partners(a.id, c.id)
+    run(matr_mod.matr_forcemarry.callback(ctx_for(bot, admin), a, b))
+    assert b.id in bot.store.partners_of(a.id)
+    notices = bot.store.notices_for(c.id)
+    assert len(notices) == 1
+    assert notices[0].spouse_id == a.id
+    assert notices[0].other_id == b.id
+
+
+def test_decline_with_only_a_notice_hints_at_divorce() -> None:
+    """`decline` still applies to proposals only; with just a notice pending
+    it points the user at `divorce` and leaves everything intact."""
+    bot = make_bot()
+    a, b, c = _triangle(bot)
+    ctx = ctx_for(bot, c)
+    run(matr_mod.matr_decline.callback(ctx, None))
+    assert c.id in bot.store.partners_of(b.id)
+    assert len(bot.store.notices_for(c.id)) == 1
 
 
 # ---------------------------------------------------------------------------

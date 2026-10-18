@@ -5,16 +5,20 @@ A MarriageBot-style family-tree bot for Discord, written in Python with
 adopt, disown, and render family trees — **for humans and bot accounts alike**.
 
 All commands live under one group, `matr`, invoked with a per-guild prefix
-(default `!`):
+(default `!`) or as Discord slash commands:
 
 ```
 !matr <action> <params>
+/matr <action> <params>
 ```
 
 ## Features
 
 - **Marriages** — propose, accept/decline (buttons *or* text commands),
-  divorce, multiple simultaneous partners.
+  divorce, multiple simultaneous partners. When a married user takes
+  another partner, every existing partner (of *both* spouses) is notified
+  and can **accept** (acknowledge the arrangement) or **divorce** on the
+  spot — the new marriage stands either way.
 - **Parentage** — `adopt` (they become your child) and `makeparent` (they
   become your parent), `disown`, `disownall`, `emancipate`/`runaway`,
   `abandon` (wipe your whole family).
@@ -31,10 +35,18 @@ All commands live under one group, `matr`, invoked with a per-guild prefix
   `forceemancipate` (Manage Server).
 - **Fun commands** — `hug`, `cuddle`, `kiss`, `pat`, `poke`, `wave`,
   `lick`, `nom`, `tickle`, `highfive`, `handhold`, `slap`, `punch`,
-  `bite`, `stab`, `ship`,
+  `bite`, `stab`, `ship`, `flirt` (terrible pickup lines), `date`
+  (terrible date ideas), `anniversary` (how long you've been married),
   each with a random SFW anime GIF via the
   [Fluxpoint API](https://docs.fluxpoint.dev/api/endpoints/sfw-anime-gifs)
   (like the original MarriageBot).
+- **Bot-directed quips** — aiming an action at Matrimony itself appends a
+  rotating one-liner as Discord subtext (a `-# ` line) under the normal
+  reply, and proposals at the bot are declined outright ("sorry, taken by
+  discord.py").
+- **Slash commands** — every command is a discord.py hybrid, so `/matr`
+  mirrors `!matr` exactly: `/matr marry`, `/matr fun hug`,
+  `/matr admin forcemarry`, `/matr meta stats`.
 - **Meta** — `info`, `invite`, `stats`, `help`.
 
 ## Bot accounts are first-class
@@ -62,9 +74,9 @@ explicitly supports bot-authored commands and bot targets:
 | Command | Description |
 | --- | --- |
 | `!matr help` | Show the command list |
-| `!matr marry @user` | Propose to a user or bot |
+| `!matr marry @user` | Propose to a user or bot (existing partners get an accept/divorce notice) |
 | `!matr divorce [@user]` | Divorce a partner (required if you have several) |
-| `!matr accept [@proposer]` / `decline` | Answer a pending proposal |
+| `!matr accept [@proposer]` / `decline` | Answer a pending proposal — `accept` also acknowledges partner notices |
 | `!matr partners [@user]` | List partners |
 | `!matr adopt @user` | Ask to adopt a user as your child |
 | `!matr makeparent @user` | Ask a user to become your parent |
@@ -84,6 +96,9 @@ explicitly supports bot-authored commands and bot targets:
 | `!matr forceemancipate @user` | Force-remove a parent (Manage Server) |
 | `!matr hug`/`cuddle`/`kiss`/`pat`/`poke`/`wave`/`lick`/`nom`/`tickle`/`highfive`/`handhold`/`slap`/`punch`/`bite`/`stab @user` | Flavour actions (+ GIF) |
 | `!matr ship @a [@b]` | Deterministic ship percentage (+ GIF) |
+| `!matr flirt @user` (alias `rizz`) | Terrible pickup line (+ GIF) |
+| `!matr date @user` (alias `dateidea`) | Terrible date idea (+ GIF) |
+| `!matr anniversary [@partner]` (alias `anniv`) | Time married (+ GIF) |
 | `!matr info` / `invite` / `stats` | Bot information |
 
 `@Matrimony matr ...` (mention prefix) also always works.
@@ -120,7 +135,7 @@ docker run -e MATRIMONY_TOKEN=... -v matrimony-data:/data matrimony
 | --- | --- | --- |
 | `MATRIMONY_TOKEN` | *(required)* | Discord bot token |
 | `MATRIMONY_DEFAULT_PREFIX` | `!` | Fallback prefix for guilds/DMs |
-| `MATRIMONY_COMMAND_NAME` | `matr` | The command group name (`!matr ...`) |
+| `MATRIMONY_COMMAND_NAME` | `matr` | The command group name (`!matr` and `/matr`) |
 | `MATRIMONY_DB_PATH` | `matrimony.db` | SQLite database file |
 | `MATRIMONY_MAX_PARTNERS` | `0` | Partner cap per user (0 = unlimited) |
 | `MATRIMONY_MAX_CHILDREN` | `0` | Children cap per user (0 = unlimited) |
@@ -154,6 +169,9 @@ header). Mappings:
 | `bite` | `bite` |
 | `stab` | `punch` *(no `stab` endpoint exists; closest fit)* |
 | `ship` | `handhold` |
+| `flirt` | `wink` |
+| `date` | `hug` |
+| `anniversary` | `kiss` |
 
 GIF fetching never blocks the action: a missing/empty key, HTTP error,
 timeout, or malformed response just sends the reply without an image.
@@ -171,19 +189,27 @@ Matrimony replicates the original's mechanics as closely as is practical
 - **One parent per child**, matching upstream's single-parent tree model.
 - Proposals need the target's consent (upstream uses buttons; Matrimony
   supports buttons *and* `accept`/`decline` text commands, which also lets
-  non-UI bots respond).
+  non-UI bots respond). The marriage forms the moment the target accepts —
+  existing partners of either spouse are then notified and may acknowledge
+  or immediately divorce their own partner.
 - `incest` is a per-guild admin toggle, off by default.
 - No partner limit by default (upstream allows polygamy; caps are
   configurable here).
 
 **Known divergences:**
 
+- Upstream has no equivalent of Matrimony's partner notices: when a user
+  marries someone new, each existing partner of both spouses gets an
+  accept/divorce prompt (buttons or `accept`/`divorce` text commands).
+  Accepting is purely an acknowledgement; it never blocks the marriage.
+
 - Upstream renders trees as Graphviz images; Matrimony renders inline text
   trees (no Graphviz dependency, works in DMs and on lightweight hosts).
 - Upstream has no documented "bots can be married" support — Matrimony adds
   it deliberately.
-- Upstream now primarily uses slash commands; Matrimony uses the requested
-  `!matr <action>` prefix-command surface (plus mention-prefix support).
+- Upstream now primarily uses slash commands; Matrimony supports both
+  `!matr <action>` prefix commands (plus mention-prefix) and equivalent
+  `/matr` slash commands via discord.py hybrid commands.
 - Gold-tier/perks features (custom colours, bigger limits) are not
   replicated; limits are plain env vars instead.
 - Slash-command-only upstream additions (`customize-tree`, `transfer-gold`,
