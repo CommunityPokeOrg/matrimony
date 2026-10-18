@@ -42,10 +42,21 @@ All commands live under one group, `matr`, invoked with a per-guild prefix
   each with a random SFW anime GIF via the
   [Fluxpoint API](https://docs.fluxpoint.dev/api/endpoints/sfw-anime-gifs)
   (like the original MarriageBot).
+- **Drifting ship percentages** — `ship @a @b` is deterministic for a
+  pair at a given moment, but wanders smoothly over ~24h instead of being
+  pinned forever, and busy channels nudge it: the score includes the
+  rolling count of channel messages over the last 10 minutes (a small,
+  bounded in-memory window fed by every observed message, bots included).
 - **Bot-directed quips** — aiming an action at Matrimony itself appends a
   rotating one-liner as Discord subtext (a `-# ` line) under the normal
   reply, and proposals at the bot are declined outright ("sorry, taken by
   discord.py").
+- **Unknown-action quips** — `!matr blorp` (or any nonexistent action)
+  gets a rotating funny quip plus the help embed, never silence. The
+  bot's own messages never trigger it.
+- **Marital wisdom** — `!matr help` (and bare `!matr`) ends with a long
+  list of quips about memes, Discord culture, programming, and
+  relationships, below the full command listing.
 - **Slash commands** — every command is a discord.py hybrid, so `/matr`
   mirrors `!matr` exactly: `/matr marry`, `/matr fun hug`,
   `/matr admin forcemarry`, `/matr meta stats`.
@@ -97,7 +108,7 @@ explicitly supports bot-authored commands and bot targets:
 | `!matr forceadopt @parent @child` | Force adoption (Manage Server) |
 | `!matr forceemancipate @user` | Force-remove a parent (Manage Server) |
 | `!matr hug`/`cuddle`/`kiss`/`pat`/`poke`/`wave`/`lick`/`nom`/`tickle`/`highfive`/`handhold`/`slap`/`punch`/`bite`/`stab @user` | Flavour actions (+ GIF) |
-| `!matr ship @a [@b]` | Deterministic ship percentage (+ GIF) |
+| `!matr ship @a [@b]` | Drifting ship percentage (pair + time + channel chatter; + GIF) |
 | `!matr flirt @user` (alias `rizz`) | Terrible pickup line (+ GIF) |
 | `!matr date @user` (alias `dateidea`) | Terrible date idea (+ GIF) |
 | `!matr anniversary [@partner]` (alias `anniv`) | Time married (+ GIF) |
