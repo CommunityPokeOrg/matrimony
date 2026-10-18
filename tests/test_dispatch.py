@@ -415,6 +415,76 @@ def test_mention_prefix_from_bot_author() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Commands on a later line of the message
+# ---------------------------------------------------------------------------
+
+
+def test_command_on_second_line() -> None:
+    """Chatter before the command is fine: the prefix just has to start
+    a line of its own."""
+    bot = make_bot()
+    send = stub_send(bot)
+    msg = wire_message(bot, user(1), "hey everyone\n!matr help")
+    run(bot.process_commands(msg))
+    send.assert_awaited_once()
+
+
+def test_command_on_later_line_after_several_lines() -> None:
+    bot = make_bot()
+    send = stub_send(bot)
+    msg = wire_message(
+        bot, user(1), "line one\nline two\nline three\n!matr stats"
+    )
+    run(bot.process_commands(msg))
+    send.assert_awaited_once()
+
+
+def test_command_line_allows_leading_whitespace() -> None:
+    bot = make_bot()
+    send = stub_send(bot)
+    msg = wire_message(bot, user(1), "chatter\n   !matr help")
+    run(bot.process_commands(msg))
+    send.assert_awaited_once()
+
+
+def test_trailing_lines_after_command_are_ignored() -> None:
+    """Only the command line is parsed - text below it isn't read as
+    arguments."""
+    bot = make_bot()
+    send = stub_send(bot)
+    msg = wire_message(bot, user(1), "!matr partners\nand some chatter")
+    run(bot.process_commands(msg))
+    send.assert_awaited_once()
+
+
+def test_mention_command_on_second_line() -> None:
+    bot = make_bot()
+    send = stub_send(bot)
+    msg = wire_message(
+        bot, user(1), f"listen up\n<@{BOT_USER_ID}> matr help"
+    )
+    run(bot.process_commands(msg))
+    send.assert_awaited_once()
+
+
+def test_mid_line_command_is_not_recognized() -> None:
+    """The prefix must open a line - `say !matr help now` is chatter."""
+    bot = make_bot()
+    send = stub_send(bot)
+    msg = wire_message(bot, user(1), "say !matr help now")
+    run(bot.process_commands(msg))
+    send.assert_not_awaited()
+
+
+def test_multiline_message_without_command_ignored() -> None:
+    bot = make_bot()
+    send = stub_send(bot)
+    msg = wire_message(bot, user(1), "hello\nhow are you\ntalk later")
+    run(bot.process_commands(msg))
+    send.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
 # Prefix resolution
 # ---------------------------------------------------------------------------
 

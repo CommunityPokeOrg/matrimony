@@ -830,11 +830,38 @@ def _help_embed(
             "@user` - `ship @a @b` - `flirt @user` - `date @user` - "
             "`anniversary [@partner]`\n"
             "**Meta**\n"
-            "`info` - `invite` - `stats`\n\n"
+            "`info` - `invite` - `stats` - `help [bot]`\n\n"
             "Family trees are global across servers, and bot accounts can "
             "use commands and be married or adopted. Users may have multiple "
             "partners; existing partners are notified of each new marriage "
             "and may acknowledge it or divorce on the spot.\n\n"
+            f"**Marital wisdom**\n-# {wisdom}"
+        ),
+        colour=GOLD,
+    )
+
+
+def _bot_help_embed(
+    prefix: str, cmd: str, rng: random.Random | None = None
+) -> discord.Embed:
+    """``!matr help bot`` - how to talk to the bot and what it tolerates."""
+    wisdom = quips.quip("help", rng or random)
+    return discord.Embed(
+        title="Matrimony - bot help",
+        description=(
+            "How to talk to Matrimony:\n\n"
+            f"· prefix commands with `{prefix}{cmd}` - e.g. "
+            f"`{prefix}{cmd} partners`\n"
+            "· or mention the bot instead of the prefix: "
+            "`@Matrimony matr partners`\n"
+            "· the command may sit on **any line** of the message - "
+            "chatter first is fine\n"
+            f"· every action also exists as a slash command: `/{cmd} ...`\n"
+            "· bot accounts are first-class: they can run commands and be "
+            "married, adopted, or blocked\n"
+            "· family trees are **global** across servers\n"
+            "· server admins can change the prefix with "
+            f"`{prefix}{cmd} prefix <new>`\n\n"
             f"**Marital wisdom**\n-# {wisdom}"
         ),
         colour=GOLD,
@@ -885,11 +912,18 @@ matr.app_command = None
 
 
 @matr.command(name="help")
-async def matr_help(ctx: commands.Context) -> None:
-    """Show the command list."""
+async def matr_help(
+    ctx: commands.Context, topic: str | None = None
+) -> None:
+    """Show the command list. `help bot` shows bot-specific guidance."""
     bot = _bot(ctx)
+    builder = (
+        _bot_help_embed
+        if topic is not None and topic.lower() == "bot"
+        else _help_embed
+    )
     await ctx.reply(
-        embed=_help_embed(ctx.prefix or "!", bot.config.command_name)
+        embed=builder(ctx.prefix or "!", bot.config.command_name)
     )
 
 

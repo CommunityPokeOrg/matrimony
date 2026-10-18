@@ -92,8 +92,9 @@ explicitly supports bot-authored commands and bot targets:
   self-command loops while leaving every other bot free to participate.
 - Command parsing is lenient: leading/trailing whitespace and extra text
   after the arguments are tolerated, `@Matrimony matr ...` works as a
-  mention prefix, and whitespace after the prefix (`! matr help`) is
-  accepted.
+  mention prefix, whitespace after the prefix (`! matr help`) is
+  accepted, and the command may sit on **any line** of the message —
+  chatter first, then `!matr <action>` on its own line, still runs.
 - Covered by tests: proposal/accept flows driven by bot-authored commands
   (`tests/test_dispatch.py`).
 
@@ -101,7 +102,7 @@ explicitly supports bot-authored commands and bot targets:
 
 | Command | Description |
 | --- | --- |
-| `!matr help` | Show the command list |
+| `!matr help [bot]` | Show the command list; `help bot` shows bot-specific guidance |
 | `!matr marry @user` | Propose to a user or bot (existing partners get an accept/divorce notice) |
 | `!matr divorce [@user]` | Divorce a partner (required if you have several) |
 | `!matr accept [@proposer]` / `decline` | Answer a pending proposal — `accept` also acknowledges partner notices |
@@ -131,7 +132,9 @@ explicitly supports bot-authored commands and bot targets:
 | `!matr anniversary [@partner]` (alias `anniv`) | Time married (+ GIF) |
 | `!matr info` / `invite` / `stats` | Bot information |
 
-`@Matrimony matr ...` (mention prefix) also always works.
+`@Matrimony matr ...` (mention prefix) also always works, and the
+command doesn't have to open the message — any line that starts with
+the prefix is parsed as the command (everything else is chatter).
 
 On the slash side, `restrain` is `/matr restrain` and `clear` lives under
 the admin subgroup as `/matr admin clear`; `anniversary` is under

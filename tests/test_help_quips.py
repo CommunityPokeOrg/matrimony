@@ -104,6 +104,54 @@ def test_bare_matr_and_help_each_get_one_wisdom_line() -> None:
 
 
 # ---------------------------------------------------------------------------
+# `!matr help bot` - bot-specific submenu
+# ---------------------------------------------------------------------------
+
+
+def test_help_bot_shows_bot_submenu() -> None:
+    bot = make_bot()
+    send = stub_send(bot)
+    run(bot.process_commands(wire_message(bot, user(1), "!matr help bot")))
+    send.assert_awaited_once()
+    embed = _sent_payload(send)["embeds"][0]
+    assert "bot" in embed["title"].lower()
+    # Bot-specific guidance, not the generic command listing.
+    assert "any line" in embed["description"]
+    assert "bot accounts are first-class" in embed["description"]
+    assert "**Love**" not in embed["description"]
+    # Still ends with the usual wisdom subtext.
+    lines = _wisdom_lines(embed["description"])
+    assert len(lines) == 1
+    assert lines[0].removeprefix("-# ") in _HELP_QUIPS
+
+
+def test_help_bot_topic_is_case_insensitive() -> None:
+    bot = make_bot()
+    send = stub_send(bot)
+    run(bot.process_commands(wire_message(bot, user(1), "!matr help BOT")))
+    embed = _sent_payload(send)["embeds"][0]
+    assert "bot" in embed["title"].lower()
+
+
+def test_help_with_other_topic_falls_back_to_full_list() -> None:
+    """An unrecognized `help <topic>` shows the normal help embed."""
+    bot = make_bot()
+    send = stub_send(bot)
+    run(bot.process_commands(wire_message(bot, user(1), "!matr help trees")))
+    embed = _sent_payload(send)["embeds"][0]
+    assert "MarriageBot-style" in embed["description"]
+    assert "**Trees**" in embed["description"]
+
+
+def test_help_bot_mention_advertised() -> None:
+    """The bot submenu tells users the mention form exists."""
+    from matrimony.cogs.matr import _bot_help_embed
+
+    emb = _bot_help_embed("!", "matr")
+    assert "@Matrimony" in emb.description
+
+
+# ---------------------------------------------------------------------------
 # Unknown subcommands -> funny quip
 # ---------------------------------------------------------------------------
 
