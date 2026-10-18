@@ -150,18 +150,21 @@ def test_slash_tree_layout() -> None:
         "accept",
         "decline",
         "partners",
-        "anniversary",
         "adopt",
         "block",
+        "restrain",
     ):
         assert name in direct
 
     subs = {c.name: c for c in group.commands if hasattr(c, "commands")}
     assert set(subs) == {"fun", "admin", "meta"}
     assert len(group.commands) <= 25
-    assert len(subs["fun"].commands) == 18
-    assert len(subs["admin"].commands) == 6
+    assert len(subs["fun"].commands) == 19
+    assert len(subs["admin"].commands) == 7
     assert len(subs["meta"].commands) == 4
+    # `anniversary` lives under fun so the root group stays within
+    # Discord's 25-child limit.
+    assert "anniversary" in {c.name for c in subs["fun"].commands}
 
     # Slash command names must be lowercase and within 32 chars.
     for command in group.walk_commands():

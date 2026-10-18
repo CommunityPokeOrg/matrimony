@@ -91,6 +91,10 @@ class Config:
         max_children: Maximum children per user. 0 = unlimited.
         max_tree_depth: Depth limit applied when rendering family trees.
         proposal_ttl_seconds: How long a proposal stays open.
+        restraining_order_ttl_seconds: How long a restraining order lasts
+            (default 1 hour).
+        jail_sweep_seconds: How often the background sweep checks for
+            expired restraining orders and finished jail sentences.
         fluxpoint_api_key: Fluxpoint API token used to fetch action GIFs.
             Defaults to the provider's public-tier key; set
             ``FLUXPOINT_API_KEY`` to your own token, or to an empty string
@@ -111,6 +115,8 @@ class Config:
     max_children: int = 0
     max_tree_depth: int = 10
     proposal_ttl_seconds: int = 300
+    restraining_order_ttl_seconds: int = 3600
+    jail_sweep_seconds: int = 20
     fluxpoint_api_key: str = DEFAULT_FLUXPOINT_API_KEY
     allowed_channels: dict[int, frozenset[int]] = field(default_factory=dict)
 
@@ -126,6 +132,10 @@ class Config:
             max_children=int(env.get("MATRIMONY_MAX_CHILDREN", "0")),
             max_tree_depth=int(env.get("MATRIMONY_MAX_TREE_DEPTH", "10")),
             proposal_ttl_seconds=int(env.get("MATRIMONY_PROPOSAL_TTL", "300")),
+            restraining_order_ttl_seconds=int(
+                env.get("MATRIMONY_RESTRAINING_ORDER_TTL", "3600")
+            ),
+            jail_sweep_seconds=int(env.get("MATRIMONY_JAIL_SWEEP", "20")),
             fluxpoint_api_key=env.get(
                 "FLUXPOINT_API_KEY", DEFAULT_FLUXPOINT_API_KEY
             ),

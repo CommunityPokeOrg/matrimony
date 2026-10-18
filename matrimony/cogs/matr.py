@@ -7,18 +7,20 @@ configured command name) and owns the error handler.
 
 from __future__ import annotations
 
+import contextlib
 import itertools
 import random
 import time
 
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 from .. import __version__
+from .. import jail as jail_mod
 from ..bot import MatrimonyBot
 from ..ship import ship_score
-from ..store import Notice, Proposal
+from ..store import Notice, Proposal, RestrainingOrder
 
 GREEN = discord.Color(0x2ECC71)
 RED = discord.Color(0xE74C3C)
@@ -221,7 +223,47 @@ _UNKNOWN_QUIPS = [
     "you misspelled it so confidently we're letting it slide",
 ]
 
-_QUIP_SETS: dict[str, list[str]] = {**_BOT_QUIPS, "unknown": _UNKNOWN_QUIPS}
+# When a restrained user tries to act on the protected user anyway.
+_RESTRAIN_QUIPS = [
+    "the law is literally one message away",
+    "personal space, now legally enforced",
+    "the paperwork holds - this time",
+    "restraining order: active and petty",
+]
+
+# When a jailed user tries to act on somebody on the outside.
+_JAIL_QUIPS = [
+    "the walls have no DMs",
+    "yard time doesn't include them",
+    "the bars only bend for other inmates",
+    "solitary means solitary",
+    "you can look but you can't touch - literally",
+]
+
+# The release announcement when a sentence ends.
+_RELEASE_QUIPS = [
+    "time served, tree trimmed",
+    "the gates swing open; the love stays inside",
+    "parole granted - family status: complicated no longer",
+    "free to marry someone who isn't a co-defendant",
+]
+
+# Appended to jail-relationship dissolution notices.
+_DISSOLVE_QUIPS = [
+    "it was never meant to last past lockup",
+    "what happens in jail stays in jail",
+    "the prison chapel issues no certificates",
+    "conjugal visits end when the sentence does",
+]
+
+_QUIP_SETS: dict[str, list[str]] = {
+    **_BOT_QUIPS,
+    "unknown": _UNKNOWN_QUIPS,
+    "restrain": _RESTRAIN_QUIPS,
+    "jail": _JAIL_QUIPS,
+    "release": _RELEASE_QUIPS,
+    "dissolve": _DISSOLVE_QUIPS,
+}
 
 _QUIP_CYCLES: dict[str, itertools.cycle] = {}
 
@@ -300,6 +342,9 @@ async def _resolve_proposal(
 
 async def _enact(bot: MatrimonyBot, proposal: Proposal, ctx_or_int) -> None:
     """Apply a proposal's effect to the family tree."""
+    if proposal.jail:
+        await _enact_jail(bot, proposal, ctx_or_int)
+        return
     proposer = _name_of(bot, None)(proposal.proposer)
     target = _name_of(bot, None)(proposal.target)
     if proposal.kind == "marry":
@@ -335,6 +380,63 @@ async def _enact(bot: MatrimonyBot, proposal: Proposal, ctx_or_int) -> None:
             )
         else:
             await _respond(ctx_or_int, "They already have a parent.", False)
+
+
+async def _enact_jail(
+    bot: MatrimonyBot, proposal: Proposal, ctx_or_int
+) -> None:
+    """Apply a jail proposal to the jail relationship tables.
+
+    Only enacts while BOTH parties are still inside - a jail proposal
+    accepted after someone's release lapses instead of writing to the
+    permanent family tree."""
+    now = int(time.time())
+    both_inside = (
+        bot.store.is_jailed(proposal.proposer, now)
+        and bot.store.is_jailed(proposal.target, now)
+    )
+    if not both_inside:
+        await _respond(
+            ctx_or_int,
+            "Someone was released first - jail relationships only form "
+            "inside. Propose again on the outside.",
+            False,
+        )
+        return
+    proposer = _name_of(bot, None)(proposal.proposer)
+    target = _name_of(bot, None)(proposal.target)
+    if proposal.kind == "marry":
+        bot.store.add_jail_partners(proposal.proposer, proposal.target)
+        await _respond(
+            ctx_or_int,
+            f"{proposer} and {target} are now jail-married! :tada: "
+            "(dissolved on release)",
+            True,
+        )
+    elif proposal.kind == "adopt":
+        if bot.store.add_jail_child(proposal.proposer, proposal.target):
+            await _respond(
+                ctx_or_int,
+                f"{target} is now {proposer}'s jail child. "
+                "(dissolved on release)",
+                True,
+            )
+        else:
+            await _respond(
+                ctx_or_int, "They already have a jail parent.", False
+            )
+    elif proposal.kind == "makeparent":
+        if bot.store.add_jail_child(proposal.target, proposal.proposer):
+            await _respond(
+                ctx_or_int,
+                f"{target} is now {proposer}'s jail parent. "
+                "(dissolved on release)",
+                True,
+            )
+        else:
+            await _respond(
+                ctx_or_int, "They already have a jail parent.", False
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -458,11 +560,240 @@ async def _notify_new_partners(
             )
 
 
+# ---------------------------------------------------------------------------
+# Restraining orders and jail
+# ---------------------------------------------------------------------------
+
+
+async def _jail_block(ctx: commands.Context, target_id: int) -> bool:
+    """True (and replies) when the author is jailed and ``target_id`` is
+    not - inmates may only aim actions at fellow inmates."""
+    bot = _bot(ctx)
+    now = int(time.time())
+    sentence = bot.store.sentence_for(ctx.author.id, now)
+    if sentence is None or bot.store.is_jailed(target_id, now):
+        return False
+    await _say(
+        ctx,
+        f"You're in jail - actions only reach other inmates. "
+        f"{_quip('jail')}\nReleased <t:{sentence.release_at}:R>.",
+        ok=False,
+    )
+    return True
+
+
+PRESS_CHARGES_TIMEOUT = 120  # seconds to answer a violation prompt
+
+
+class PressChargesView(discord.ui.View):
+    """Yes/No prompt offered to the protected user after a violation.
+
+    Pressing charges jails the offender for the action's sentence;
+    declining (or letting it time out) changes nothing - the restraining
+    order keeps standing until its own expiry."""
+
+    def __init__(self, order: RestrainingOrder, action: str) -> None:
+        super().__init__(timeout=PRESS_CHARGES_TIMEOUT)
+        self.order = order
+        self.action = action
+        self.message: discord.Message | None = None
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.order.protected:
+            await interaction.response.send_message(
+                "This restraining order isn't yours to enforce.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    async def on_timeout(self) -> None:
+        for item in self.children:
+            item.disabled = True
+        if self.message is not None:
+            with contextlib.suppress(discord.HTTPException):
+                await self.message.edit(view=self)
+
+    @discord.ui.button(label="Press charges", style=discord.ButtonStyle.danger)
+    async def press(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        await _resolve_charge(
+            interaction.client, interaction, self.order, self.action,
+            pressed=True,
+        )
+        self.stop()
+
+    @discord.ui.button(label="Let it slide", style=discord.ButtonStyle.secondary)
+    async def decline(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        await _resolve_charge(
+            interaction.client, interaction, self.order, self.action,
+            pressed=False,
+        )
+        self.stop()
+
+
+async def _resolve_charge(
+    bot: MatrimonyBot,
+    ctx_or_int,
+    order: RestrainingOrder,
+    action: str,
+    *,
+    pressed: bool,
+) -> bool:
+    """Answer a press-charges prompt. ``pressed=True`` jails the offender
+    for ``action``'s sentence; the order itself always keeps standing."""
+    if not pressed:
+        await _respond(
+            ctx_or_int,
+            "No charges pressed - the restraining order still stands "
+            "until it expires.",
+            False,
+        )
+        return True
+    if bot.store.restraining_order(order.protected, order.restrained) is None:
+        # Lapsed between the prompt and the button press.
+        await _respond(
+            ctx_or_int,
+            "That restraining order already expired - no charges filed.",
+            False,
+        )
+        return False
+    seconds = jail_mod.sentence_seconds(action)
+    bot.store.jail_inmate(
+        order.restrained,
+        order.guild_id,
+        order.channel_id,
+        action,
+        order.protected,
+        seconds,
+    )
+    await _respond(
+        ctx_or_int,
+        f"<@{order.restrained}> is going to jail for "
+        f"**{_fmt_duration(seconds)}** for trying to **{action}** "
+        f"<@{order.protected}>.",
+        True,
+    )
+    return True
+
+
+async def _restrain_block(
+    ctx: commands.Context, target: discord.User, action: str
+) -> bool:
+    """True (and posts the press-charges prompt) when ``target`` holds an
+    active restraining order against the author for ``action``."""
+    bot = _bot(ctx)
+    order = bot.store.restraining_order(target.id, ctx.author.id)
+    if order is None:
+        return False
+    view = PressChargesView(order, action)
+    view.message = await ctx.send(
+        embed=_embed(
+            f"{target.mention}: {ctx.author.mention} just tried to "
+            f"**{action}** you in violation of your restraining order "
+            f"(expires <t:{order.expires_at}:R>). Press charges?\n"
+            f"-# {_quip('restrain')}",
+            RED,
+        ),
+        view=view,
+    )
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Guild reset (`matr clear`)
+# ---------------------------------------------------------------------------
+
+CLEAR_CONFIRM_TIMEOUT = 60  # seconds to confirm the reset
+
+_CLEAR_SCOPE = (
+    "This permanently deletes **this server's**:\n"
+    "\u00b7 guild settings (custom prefix, incest toggle)\n"
+    "\u00b7 open proposals filed here\n"
+    "\u00b7 partner notices created here\n"
+    "\u00b7 restraining orders filed here\n"
+    "\u00b7 jail sentences handed down here (inmates are released and "
+    "their jail relationships dissolved)\n\n"
+    "**Not touched:** the global family tree (marriages, adoptions and "
+    "parent/child links span every server - they aren't guild state) and "
+    "personal block lists. Use the force commands or the members' own "
+    "`divorce`/`disown`/`emancipate`/`abandon` for those."
+)
+
+
+class ClearConfirmView(discord.ui.View):
+    """Confirm/Cancel prompt gating `matr clear`. Only the invoking
+    admin's presses count; on timeout the buttons disable and nothing
+    is cleared."""
+
+    def __init__(self, invoker_id: int, guild_id: int) -> None:
+        super().__init__(timeout=CLEAR_CONFIRM_TIMEOUT)
+        self.invoker_id = invoker_id
+        self.guild_id = guild_id
+        self.message: discord.Message | None = None
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.invoker_id:
+            await interaction.response.send_message(
+                "Only the admin who ran the command can answer this.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    async def on_timeout(self) -> None:
+        for item in self.children:
+            item.disabled = True
+        if self.message is not None:
+            with contextlib.suppress(discord.HTTPException):
+                await self.message.edit(view=self)
+
+    @discord.ui.button(label="Confirm reset", style=discord.ButtonStyle.danger)
+    async def confirm(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        await _clear_guild(interaction.client, interaction, self.guild_id)
+        self.stop()
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        await _respond(
+            interaction, "Reset cancelled - nothing was cleared.", False
+        )
+        self.stop()
+
+
+async def _clear_guild(bot: MatrimonyBot, ctx_or_int, guild_id: int) -> None:
+    """Run the guild reset and post the counts."""
+    counts = bot.store.clear_guild(guild_id)
+    await _respond(
+        ctx_or_int,
+        "Guild state reset.\n"
+        f"\u00b7 guild settings: **{counts['guild_settings']}**\n"
+        f"\u00b7 proposals: **{counts['proposals']}**\n"
+        f"\u00b7 partner notices: **{counts['notices']}**\n"
+        f"\u00b7 restraining orders: **{counts['restraining_orders']}**\n"
+        f"\u00b7 jail sentences: **{counts['jail_sentences']}** "
+        f"(jail marriages dissolved: **{counts['jail_partners']}**, "
+        f"jail adoptions dissolved: **{counts['jail_children']}**)\n\n"
+        "Global family relationships and personal block lists were "
+        "left untouched.",
+        True,
+    )
+
+
 async def _send_proposal(
     ctx: commands.Context,
     target: discord.User | discord.Member,
     kind: str,
     error: str | None,
+    *,
+    jail_pair: bool = False,
 ) -> None:
     """Shared entry for marry/adopt/makeparent."""
     bot = _bot(ctx)
@@ -474,6 +805,10 @@ async def _send_proposal(
             ok=False,
         )
         return
+    if await _jail_block(ctx, target.id):
+        return
+    if await _restrain_block(ctx, target, kind):
+        return
     if error:
         await _say(ctx, error, ok=False)
         return
@@ -484,6 +819,7 @@ async def _send_proposal(
         target.id,
         kind,
         bot.config.proposal_ttl_seconds,
+        jail=jail_pair,
     )
     if proposal is None:
         await _say(ctx, "You already have a pending proposal for them.", ok=False)
@@ -491,7 +827,12 @@ async def _send_proposal(
     verb = PROPOSAL_VERBS[kind]
     cmd = bot.config.command_name
     notice_line = ""
-    if kind == "marry":
+    if jail_pair:
+        notice_line = (
+            "\nThis is a **jail relationship** - it dissolves the moment "
+            "either of you is released."
+        )
+    elif kind == "marry":
         others = sorted(
             set(bot.store.partners_of(ctx.author.id))
             | set(bot.store.partners_of(target.id))
@@ -603,12 +944,13 @@ def _help_embed(
             "`tree [@user]` - `fulltree [@user]` - `parent [@user]` - "
             "`children [@user]` - `siblings [@user]` - `familysize [@user]` - "
             "`relationship @a @b`\n"
-            "**Blocks**\n"
-            "`block @user` - `unblock @user` - `blocked`\n"
+            "**Blocks & law**\n"
+            "`block @user` - `unblock @user` - `blocked` - "
+            "`restrain @user` (1h order - violations offer jail time)\n"
             "**Server** *(Manage Server)*\n"
             "`prefix <new>` - `incest` - `forcemarry @a @b` - "
             "`forcedivorce @a [@b]` - `forceadopt @parent @child` - "
-            "`forceemancipate @user`\n"
+            "`forceemancipate @user` - `clear`\n"
             "**Fun**\n"
             "`hug`/`cuddle`/`kiss`/`pat`/`poke`/`wave`/`lick`/`nom`\n"
             "`tickle`/`highfive`/`handhold`/`slap`/`punch`/`bite`/`stab "
@@ -689,6 +1031,16 @@ async def matr_help(ctx: commands.Context) -> None:
 async def matr_marry(ctx: commands.Context, user: discord.User) -> None:
     """Propose marriage to another user - or bot."""
     bot = _bot(ctx)
+    now = int(time.time())
+    if bot.store.is_jailed(ctx.author.id, now) and bot.store.is_jailed(
+        user.id, now
+    ):
+        # Two inmates: jail rules (no incest/cap checks), jail tables.
+        error = jail_mod.check_jail_marry(
+            bot.store, ctx.author.id, user.id
+        )
+        await _send_proposal(ctx, user, "marry", error, jail_pair=True)
+        return
     error = bot.family.check_marry(
         ctx.author.id,
         user.id,
@@ -724,6 +1076,8 @@ async def matr_divorce(
         target = user.id
     if target not in partners:
         await _say(ctx, "You're not married to them.", ok=False)
+        return
+    if await _jail_block(ctx, target):
         return
     bot.store.remove_partners(ctx.author.id, target)
     gif = await bot.gifs.fetch_url("cry")
@@ -810,6 +1164,15 @@ async def matr_partners(
 async def matr_adopt(ctx: commands.Context, user: discord.User) -> None:
     """Propose adopting a user (or bot) as your child."""
     bot = _bot(ctx)
+    now = int(time.time())
+    if bot.store.is_jailed(ctx.author.id, now) and bot.store.is_jailed(
+        user.id, now
+    ):
+        error = jail_mod.check_jail_adopt(
+            bot.store, ctx.author.id, user.id
+        )
+        await _send_proposal(ctx, user, "adopt", error, jail_pair=True)
+        return
     error = bot.family.check_adopt(
         ctx.author.id,
         user.id,
@@ -825,6 +1188,17 @@ async def matr_adopt(ctx: commands.Context, user: discord.User) -> None:
 async def matr_makeparent(ctx: commands.Context, user: discord.User) -> None:
     """Ask a user to become YOUR parent."""
     bot = _bot(ctx)
+    now = int(time.time())
+    if bot.store.is_jailed(ctx.author.id, now) and bot.store.is_jailed(
+        user.id, now
+    ):
+        error = jail_mod.check_jail_adopt(
+            bot.store, user.id, ctx.author.id
+        )
+        await _send_proposal(
+            ctx, user, "makeparent", error, jail_pair=True
+        )
+        return
     error = bot.family.check_adopt(
         user.id,  # target becomes the parent
         ctx.author.id,  # you become the child
@@ -840,6 +1214,8 @@ async def matr_makeparent(ctx: commands.Context, user: discord.User) -> None:
 async def matr_disown(ctx: commands.Context, child: discord.User) -> None:
     """Disown one of your children."""
     bot = _bot(ctx)
+    if await _jail_block(ctx, child.id):
+        return
     if bot.store.parent_of(child.id) != ctx.author.id:
         await _say(ctx, "They're not your child.", ok=False)
         return
@@ -1020,6 +1396,8 @@ async def matr_relationship(
 async def matr_block(ctx: commands.Context, user: discord.User) -> None:
     """Block a user from sending you proposals."""
     bot = _bot(ctx)
+    if await _jail_block(ctx, user.id):
+        return
     if user.id == ctx.author.id:
         await _say(ctx, "You can't block yourself.", ok=False)
         return
@@ -1046,6 +1424,53 @@ async def matr_blocked(ctx: commands.Context) -> None:
         await _say(ctx, "You haven't blocked anyone.", ok=False)
         return
     await _say(ctx, "Blocked: " + ", ".join(f"<@{u}>" for u in users))
+
+
+# ---------------------------------------------------------------------------
+# Restraining orders
+# ---------------------------------------------------------------------------
+
+
+@matr.command(name="restrain", aliases=["restrainingorder"])
+@commands.guild_only()
+@app_commands.guild_only()
+async def matr_restrain(ctx: commands.Context, user: discord.User) -> None:
+    """File a restraining order against a user for one hour.
+
+    While it stands, any action they aim at you (marry, adopt,
+    makeparent, hug/slap/poke/etc.) is blocked and you're asked whether
+    to press charges - charges land them in jail. Re-filing renews
+    the hour."""
+    bot = _bot(ctx)
+    if user.id == ctx.author.id:
+        await _say(
+            ctx,
+            "You can't file a restraining order against yourself.",
+            ok=False,
+        )
+        return
+    if bot.user is not None and user.id == bot.user.id:
+        await _say(
+            ctx,
+            "Matrimony files the paperwork around here, not the other "
+            "way round.",
+            ok=False,
+        )
+        return
+    order = bot.store.file_restraining_order(
+        ctx.guild.id,
+        ctx.channel.id,
+        ctx.author.id,
+        user.id,
+        ttl_seconds=bot.config.restraining_order_ttl_seconds,
+    )
+    await _say(
+        ctx,
+        f"Restraining order filed: {user.mention} can't target you with "
+        f"proposals or actions until <t:{order.expires_at}:R>. If they "
+        "try, you'll be asked whether to press charges - charges mean "
+        "jail.",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1204,6 +1629,26 @@ async def matr_forceemancipate(ctx: commands.Context, child: discord.User) -> No
     await _say(ctx, f"Emancipated {child.mention}.")
 
 
+@matr.command(name="clear")
+@commands.guild_only()
+@app_commands.guild_only()
+@commands.has_permissions(manage_guild=True)
+@app_commands.default_permissions(manage_guild=True)
+async def matr_clear(ctx: commands.Context) -> None:
+    """Reset this server's Matrimony state (Manage Server only).
+
+    Shows a warning first: it only runs after the invoking admin presses
+    Confirm within 60 seconds."""
+    view = ClearConfirmView(ctx.author.id, ctx.guild.id)
+    view.message = await ctx.reply(
+        embed=_embed(
+            f"**Reset this server's Matrimony state?**\n\n{_CLEAR_SCOPE}",
+            RED,
+        ),
+        view=view,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Fun (simulation) commands
 # ---------------------------------------------------------------------------
@@ -1235,6 +1680,10 @@ def _make_fun(name: str) -> None:
     verb, emoji, gif_type = _FUN_VERBS[name]
 
     async def _fun(ctx: commands.Context, user: discord.User) -> None:
+        if await _jail_block(ctx, user.id):
+            return
+        if await _restrain_block(ctx, user, name):
+            return
         gif = await _bot(ctx).gifs.fetch_url(gif_type)
         if user.id == ctx.author.id:
             text = f"You {verb} yourself. Okay then. {emoji}"
@@ -1300,6 +1749,10 @@ _DATE_IDEAS = (
 async def matr_flirt(ctx: commands.Context, user: discord.User) -> None:
     """Drop a terrible pickup line on someone."""
     bot = _bot(ctx)
+    if await _jail_block(ctx, user.id):
+        return
+    if await _restrain_block(ctx, user, "flirt"):
+        return
     line = random.choice(_PICKUP_LINES)
     gif = await bot.gifs.fetch_url("wink")
     text = f"{ctx.author.mention} to {user.mention}: *{line}*"
@@ -1310,6 +1763,10 @@ async def matr_flirt(ctx: commands.Context, user: discord.User) -> None:
 async def matr_date(ctx: commands.Context, user: discord.User) -> None:
     """Invent a terrible date for you and someone."""
     bot = _bot(ctx)
+    if await _jail_block(ctx, user.id):
+        return
+    if await _restrain_block(ctx, user, "date"):
+        return
     idea = random.choice(_DATE_IDEAS)
     gif = await bot.gifs.fetch_url("hug")
     text = f"{ctx.author.mention} takes {user.mention} {idea}."
@@ -1436,7 +1893,9 @@ async def matr_stats(ctx: commands.Context) -> None:
                 f"Marriages: **{s['marriages']}**\n"
                 f"Parent-child links: **{s['parent_child_links']}**\n"
                 f"Open proposals: **{s['open_proposals']}**\n"
-                f"Partner notices: **{s['partner_notices']}**"
+                f"Partner notices: **{s['partner_notices']}**\n"
+                f"Restraining orders: **{s['restraining_orders']}**\n"
+                f"Inmates: **{s['inmates']}**"
             ),
         )
     )
@@ -1456,7 +1915,6 @@ _TOP_APP_COMMANDS = (
     "accept",
     "decline",
     "partners",
-    "anniversary",
     "adopt",
     "makeparent",
     "disown",
@@ -1473,6 +1931,7 @@ _TOP_APP_COMMANDS = (
     "block",
     "unblock",
     "blocked",
+    "restrain",
 )
 
 _APP_SUBGROUPS = (
@@ -1498,6 +1957,7 @@ _APP_SUBGROUPS = (
             "ship",
             "flirt",
             "date",
+            "anniversary",
         ),
     ),
     (
@@ -1510,6 +1970,7 @@ _APP_SUBGROUPS = (
             "forcedivorce",
             "forceadopt",
             "forceemancipate",
+            "clear",
         ),
     ),
     (
@@ -1529,12 +1990,87 @@ for _sub_name, _sub_desc, _sub_commands in _APP_SUBGROUPS:
     _matr_app_group.add_command(_sub)
 
 
+async def _announce_expiry(
+    bot: MatrimonyBot, report: jail_mod.ExpiryReport
+) -> None:
+    """Post the sweep's expiry/release notices to the channels on record.
+
+    Order lapses announce in the channel the order was filed in; releases
+    (and the jail-relationship dissolutions they cause) announce where
+    the sentence was handed down. Missing/deleted channels are skipped."""
+    for order in report.expired_orders:
+        channel = bot.get_channel(order.channel_id)
+        if channel is None:
+            continue
+        try:
+            await channel.send(
+                embed=_embed(
+                    f"The restraining order protecting "
+                    f"<@{order.protected}> against <@{order.restrained}> "
+                    f"has expired."
+                )
+            )
+        except discord.HTTPException:
+            continue
+    for rel in report.released:
+        channel = bot.get_channel(rel.sentence.channel_id)
+        if channel is None:
+            continue
+        served = rel.sentence.release_at - rel.sentence.jailed_at
+        lines = [
+            f"<@{rel.sentence.inmate}> has served their "
+            f"{_fmt_duration(served)} sentence and is released.\n"
+            f"-# {_quip('release')}"
+        ]
+        for partner in rel.divorced:
+            lines.append(
+                f"<@{rel.sentence.inmate}> and <@{partner}> were "
+                f"divorced on release. -# {_quip('dissolve')}"
+            )
+        for child in rel.children_lost:
+            lines.append(
+                f"<@{child}> was abandoned - their jail parent "
+                f"<@{rel.sentence.inmate}> was released. "
+                f"-# {_quip('dissolve')}"
+            )
+        if rel.parent_lost is not None:
+            lines.append(
+                f"<@{rel.sentence.inmate}>'s jail parent "
+                f"<@{rel.parent_lost}> is left inside - adoption "
+                f"dissolved. -# {_quip('dissolve')}"
+            )
+        try:
+            await channel.send(embed=_embed("\n".join(lines)))
+        except discord.HTTPException:
+            continue
+
+
 class MatrCog(commands.Cog):
     def __init__(self, bot: MatrimonyBot) -> None:
         self.bot = bot
         matr.name = bot.config.command_name
         matr.app_command.name = bot.config.command_name
         bot.add_command(matr)
+
+    async def cog_load(self) -> None:
+        self.expiry_sweep.change_interval(
+            seconds=self.bot.config.jail_sweep_seconds
+        )
+        self.expiry_sweep.start()
+
+    async def cog_unload(self) -> None:
+        self.expiry_sweep.cancel()
+
+    @tasks.loop(seconds=20)
+    async def expiry_sweep(self) -> None:
+        """Lapse restraining orders and release finished sentences."""
+        report = jail_mod.sweep_expiry(self.bot.store, int(time.time()))
+        if report.expired_orders or report.released:
+            await _announce_expiry(self.bot, report)
+
+    @expiry_sweep.before_loop
+    async def _before_sweep(self) -> None:
+        await self.bot.wait_until_ready()
 
     @commands.Cog.listener()
     async def on_command_error(
