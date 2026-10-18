@@ -33,8 +33,17 @@ All commands live under one group, `matr`, invoked with a per-guild prefix
 - **Incest toggle** — `!matr incest` lets server admins permit proposals
   between family members (off by default, as upstream).
 - **Blocks** — users can `block`/`unblock` others from proposing to them.
+- **Restraining orders** — `restrain` blocks every targeted action a user
+  aims at you for one hour; a violation prompts you to press charges,
+  which sends the offender to jail.
+- **Jail** — inmates can't act on free users, but can marry, adopt, and
+  interact with each other in ephemeral jail-only relationships that
+  dissolve the moment the sentence ends.
 - **Admin force commands** — `forcemarry`, `forcedivorce`, `forceadopt`,
   `forceemancipate` (Manage Server).
+- **Guild reset** — `clear` wipes this server's settings, proposals,
+  notices, restraining orders, and jail sentences behind a confirmation
+  prompt (Manage Server).
 - **Fun commands** — `hug`, `cuddle`, `kiss`, `pat`, `poke`, `wave`,
   `lick`, `nom`, `tickle`, `highfive`, `handhold`, `slap`, `punch`,
   `bite`, `stab`, `ship`, `flirt` (terrible pickup lines), `date`
@@ -101,12 +110,14 @@ explicitly supports bot-authored commands and bot targets:
 | `!matr familysize [@user]` | Size of a user's tree |
 | `!matr relationship @a @b` | How B relates to A |
 | `!matr block` / `unblock @user` / `blocked` | Manage proposal blocks |
+| `!matr restrain @user` | File a 1-hour restraining order against a user |
 | `!matr prefix [new]` | View/set guild prefix (Manage Server) |
 | `!matr incest` | Toggle incest proposals (Manage Server) |
 | `!matr forcemarry @a @b` | Force-marry a pair (Manage Server) |
 | `!matr forcedivorce @a [@b]` | Force-divorce (Manage Server) |
 | `!matr forceadopt @parent @child` | Force adoption (Manage Server) |
 | `!matr forceemancipate @user` | Force-remove a parent (Manage Server) |
+| `!matr clear` | Reset this guild's state after a Confirm/Cancel prompt (Manage Server) |
 | `!matr hug`/`cuddle`/`kiss`/`pat`/`poke`/`wave`/`lick`/`nom`/`tickle`/`highfive`/`handhold`/`slap`/`punch`/`bite`/`stab @user` | Flavour actions (+ GIF) |
 | `!matr ship @a [@b]` | Drifting ship percentage (pair + time + channel chatter; + GIF) |
 | `!matr flirt @user` (alias `rizz`) | Terrible pickup line (+ GIF) |
@@ -115,6 +126,78 @@ explicitly supports bot-authored commands and bot targets:
 | `!matr info` / `invite` / `stats` | Bot information |
 
 `@Matrimony matr ...` (mention prefix) also always works.
+
+On the slash side, `restrain` is `/matr restrain` and `clear` lives under
+the admin subgroup as `/matr admin clear`; `anniversary` is under
+`/matr fun anniversary`.
+
+## Restraining orders and jail
+
+`!matr restrain @user` files a restraining order: for the next hour
+(`MATRIMONY_RESTRAINING_ORDER_TTL`, default 3600s) every targeted action
+the restrained user aims at the protected one is blocked — proposals
+(`marry`, `adopt`, `makeparent`) and all targeted flavour actions (`hug`,
+`slap`, `poke`, `punch`, `stab`, `flirt`, `date`, ...). `ship` is exempt
+since it only reports a number. Refiling renews the hour. Enforcement
+lives in the shared command entry point, so prefix and slash invocations
+are blocked identically.
+
+A violation posts a **Press charges / Let it slide** button prompt
+(addressed to the protected user only, 120s timeout). Pressing charges
+sends the offender to jail; declining or letting it lapse leaves the
+restraining order standing until it expires.
+
+**Sentencing scales by severity.** Light interactions are minor and roll
+a random 1-5 minutes; serious actions have fixed sentences:
+
+| Action | Sentence |
+| --- | --- |
+| light fun (poke, hug, cuddle, kiss, pat, wave, lick, nom, tickle, highfive, handhold, flirt, date) | random 1-5 min |
+| slap | 10 min |
+| adopt / makeparent | 15 min |
+| bite / punch | 20 min |
+| stab | 25 min |
+| marry | 30 min |
+| any unlisted action | 15 min (default major) |
+
+**While jailed**, any targeted action aimed at a non-jailed user is
+blocked with an error embed and a rotating quip — this covers proposals
+*and* `divorce`, `disown`, and `block` attempts on free users. Inmates
+can still `marry`, `adopt`, `makeparent`, and use fun actions on **other
+inmates**; those proposals are flagged and create **jail relationships**
+stored in separate `jail_partners`/`jail_children` tables, never in the
+real family tree.
+
+**Jail relationships are ephemeral.** When a sentence ends, the inmate is
+released, every jail marriage and jail adoption they were part of is
+dissolved, and both parties are told they were divorced or abandoned on
+release — nothing carries over to the real tree.
+
+A background sweep (`MATRIMONY_JAIL_SWEEP`, every 20s by default) expires
+restraining orders (announced where they were filed), releases inmates,
+and posts release + dissolution notices. The expiry core is a pure
+function of the store and a clock (`jail.sweep_expiry`), unit-tested with
+an injected clock.
+
+## Resetting a guild
+
+`!matr clear` (slash: `/matr admin clear`) is restricted to users with
+**Manage Server** and never acts immediately: it shows a warning embed
+listing the scope with **Confirm reset** / **Cancel** buttons (60s
+timeout, invoking admin only; timeout or Cancel changes nothing).
+
+On confirm it deletes, for that guild only, and replies with counts:
+
+- guild settings (custom prefix, incest flag)
+- pending proposals and partner notices filed in the guild
+- restraining orders filed in the guild
+- jail sentences handed down in the guild — inmates are released and
+  their jail relationships dissolved
+
+It does **not** clear partners, children, or block lists: the family tree
+and personal blocks are global across servers, not guild state, so wiping
+them would erase other guilds' data — the narrowest reading of "reset
+this guild".
 
 ## Running
 
@@ -156,6 +239,8 @@ docker run -e MATRIMONY_TOKEN=... -v matrimony-data:/data matrimony
 | `MATRIMONY_PROPOSAL_TTL` | `300` | Seconds before a proposal expires |
 | `MATRIMONY_ALLOWED_CHANNELS` | *(unset)* | JSON object mapping guild ids to lists of allowed channel ids (see below) |
 | `MATRIMONY_ALLOWED_CHANNELS_FILE` | *(unset)* | Path to a JSON file with the same mapping; used when `MATRIMONY_ALLOWED_CHANNELS` is unset |
+| `MATRIMONY_RESTRAINING_ORDER_TTL` | `3600` | Seconds a restraining order lasts |
+| `MATRIMONY_JAIL_SWEEP` | `20` | Seconds between expiry sweeps (order expiry, jail release) |
 | `FLUXPOINT_API_KEY` | Fluxpoint's shared public key | Fluxpoint API token for action GIFs; set to empty to disable |
 
 ### Channel restrictions
