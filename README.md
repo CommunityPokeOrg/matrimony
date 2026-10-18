@@ -54,9 +54,10 @@ All commands live under one group, `matr`, invoked with a per-guild prefix
 - **Unknown-action quips** — `!matr blorp` (or any nonexistent action)
   gets a rotating funny quip plus the help embed, never silence. The
   bot's own messages never trigger it.
-- **Marital wisdom** — `!matr help` (and bare `!matr`) ends with a long
-  list of quips about memes, Discord culture, programming, and
-  relationships, below the full command listing.
+- **Marital wisdom** — `!matr help` (and bare `!matr`) ends with one
+  randomly chosen quip about memes, Discord culture, programming, and
+  relationships, rendered as Discord subtext below the full command
+  listing.
 - **Slash commands** — every command is a discord.py hybrid, so `/matr`
   mirrors `!matr` exactly: `/matr marry`, `/matr fun hug`,
   `/matr admin forcemarry`, `/matr meta stats`.
