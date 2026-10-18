@@ -547,7 +547,7 @@ async def _pick_answerable(
     return items[0]
 
 
-# Slightly unhinged wisdom appended to the bottom of the help embed.
+# Slightly unhinged wisdom: one random pick appended to the help embed.
 _HELP_QUIPS = [
     "it's not a bug, it's an unmarried feature",
     "your family tree has merge conflicts",
@@ -582,8 +582,10 @@ _HELP_QUIPS = [
 ]
 
 
-def _help_embed(prefix: str, cmd: str) -> discord.Embed:
-    quips = "\n".join(f"\u00b7 {q}" for q in _HELP_QUIPS)
+def _help_embed(
+    prefix: str, cmd: str, rng: random.Random | None = None
+) -> discord.Embed:
+    quip = (rng or random).choice(_HELP_QUIPS)
     return discord.Embed(
         title="Matrimony",
         description=(
@@ -618,7 +620,7 @@ def _help_embed(prefix: str, cmd: str) -> discord.Embed:
             "use commands and be married or adopted. Users may have multiple "
             "partners; existing partners are notified of each new marriage "
             "and may acknowledge it or divorce on the spot.\n\n"
-            f"**Marital wisdom**\n{quips}"
+            f"**Marital wisdom**\n-# {quip}"
         ),
         colour=GOLD,
     )

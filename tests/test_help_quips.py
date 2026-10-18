@@ -1,5 +1,6 @@
-"""Tests for the unknown-subcommand quips and the help embed's quip section."""
+"""Tests for the unknown-subcommand quips and the help embed's wisdom line."""
 
+import random
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -28,8 +29,15 @@ def _sent_payload(send: AsyncMock) -> dict:
     return params.payload if hasattr(params, "payload") else params
 
 
+def _wisdom_lines(description: str) -> list[str]:
+    """Subtext lines (`-# `) in an embed description."""
+    return [
+        line for line in description.splitlines() if line.startswith("-# ")
+    ]
+
+
 # ---------------------------------------------------------------------------
-# Help embed quips section
+# Help embed wisdom line
 # ---------------------------------------------------------------------------
 
 
@@ -38,23 +46,58 @@ def test_help_embed_under_discord_description_limit() -> None:
     assert len(emb.description) <= 4096
 
 
-def test_help_embed_has_a_long_quips_section_at_the_bottom() -> None:
+def test_help_embed_has_exactly_one_wisdom_line_at_the_bottom() -> None:
     emb = _help_embed("!", "matr")
     assert "**Marital wisdom**" in emb.description
     # The section is at the bottom of the description.
     assert emb.description.rindex("**Marital wisdom**") > (
         emb.description.rindex("**Meta**")
     )
-    # Every quip made it in (it's a long list).
+    lines = _wisdom_lines(emb.description)
+    assert len(lines) == 1
+    # The line is one quip from the pool, and only that quip made it in.
+    assert lines[0].removeprefix("-# ") in _HELP_QUIPS
+    assert sum(q in emb.description for q in _HELP_QUIPS) == 1
+
+
+def test_help_embed_wisdom_pick_is_seedable() -> None:
+    """An injected RNG makes the chosen quip deterministic."""
+    expected = random.Random(1234).choice(_HELP_QUIPS)
+    emb = _help_embed("!", "matr", rng=random.Random(1234))
+    assert f"-# {expected}" in emb.description
+
+
+def test_help_embed_different_seeds_can_pick_different_quips() -> None:
+    picks = {
+        _wisdom_lines(
+            _help_embed("!", "matr", rng=random.Random(seed)).description
+        )[0]
+        for seed in range(10)
+    }
+    assert len(picks) > 1
+
+
+def test_help_embed_quips_pool_stays_large() -> None:
+    """The source pool keeps its full set of quips for random picks."""
     assert len(_HELP_QUIPS) >= 25
-    for quip in _HELP_QUIPS:
-        assert quip in emb.description
 
 
 def test_help_embed_keeps_command_listing() -> None:
     emb = _help_embed("!", "matr")
     for section in ("**Love**", "**Parentage**", "**Trees**", "**Fun**", "**Meta**"):
         assert section in emb.description
+
+
+def test_bare_matr_and_help_each_get_one_wisdom_line() -> None:
+    """`!matr` and `!matr help` share the random wisdom behaviour."""
+    for command in ("!matr", "!matr help"):
+        bot = make_bot()
+        send = stub_send(bot)
+        run(bot.process_commands(wire_message(bot, user(1), command)))
+        description = _sent_payload(send)["embeds"][0]["description"]
+        lines = _wisdom_lines(description)
+        assert len(lines) == 1
+        assert lines[0].removeprefix("-# ") in _HELP_QUIPS
 
 
 # ---------------------------------------------------------------------------
