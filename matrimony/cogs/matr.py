@@ -7,7 +7,6 @@ configured command name) and owns the error handler.
 
 from __future__ import annotations
 
-import hashlib
 import itertools
 import random
 import time
@@ -18,6 +17,7 @@ from discord.ext import commands
 
 from .. import __version__
 from ..bot import MatrimonyBot
+from ..ship import ship_score
 from ..store import Notice, Proposal
 
 GREEN = discord.Color(0x2ECC71)
@@ -207,13 +207,29 @@ _BOT_QUIPS: dict[str, list[str]] = {
     ],
 }
 
+# Replies for `!matr <something that isn't a real action>`.
+_UNKNOWN_QUIPS = [
+    "unknown action - the council of spouses will review it",
+    "that's not a real command, but points for confidence",
+    "close, but no matrimony",
+    "that command is in another castle",
+    "404: action not found (your marriage is still valid)",
+    "unknown action; the family tree remains unbothered",
+    "the action you typed does not spark joy",
+    "try `help` - it loves you unconditionally",
+    "that isn't a thing, and honestly? respect for trying",
+    "you misspelled it so confidently we're letting it slide",
+]
+
+_QUIP_SETS: dict[str, list[str]] = {**_BOT_QUIPS, "unknown": _UNKNOWN_QUIPS}
+
 _QUIP_CYCLES: dict[str, itertools.cycle] = {}
 
 
 def _quip(kind: str) -> str:
     """Next quip in the rotation for ``kind``."""
     if kind not in _QUIP_CYCLES:
-        _QUIP_CYCLES[kind] = itertools.cycle(_BOT_QUIPS[kind])
+        _QUIP_CYCLES[kind] = itertools.cycle(_QUIP_SETS[kind])
     return next(_QUIP_CYCLES[kind])
 
 
@@ -531,7 +547,43 @@ async def _pick_answerable(
     return items[0]
 
 
+# Slightly unhinged wisdom appended to the bottom of the help embed.
+_HELP_QUIPS = [
+    "it's not a bug, it's an unmarried feature",
+    "your family tree has merge conflicts",
+    "touch grass? the tree command *is* grass",
+    "polygamy is just concurrency with worse consistency guarantees",
+    "till deadlock do us part",
+    "my love language is ACID compliance",
+    "a ship percentage is a metaphor, not a measurement",
+    "the real family was the friends we adopted along the way",
+    "marriage: a distributed system with no rollback",
+    "works on my machine, married on yours",
+    "have you tried divorcing it and marrying it again?",
+    "you had me at `if __name__ == '__main__'`",
+    "single? that's just a null pointer waiting to be dereferenced",
+    "skill issue? more like ship issue",
+    "discord kitten not included",
+    "ratio'd by your own family tree",
+    "the family tree is technically a DAG - do not ask",
+    "segfault in my heart, core dumped in yours",
+    "10/10 would propose again - sponsored by SQLite",
+    "emotional damage mitigated: spouse buff applied",
+    "shipping yourself with the bot voids the warranty",
+    "loading family tree... 99% (the last 1% is a git rebase)",
+    "you can't spell 'discord' without 'cord' - they're married now",
+    "in this economy `!matr marry` is still free",
+    "the matchmaking algorithm is vibes-based and union-approved",
+    "seven marriages in, zero conflicts - impressively rebased",
+    "our lawyers recommend `!matr help` twice daily",
+    "here be dragons (they're in a committed polycule)",
+    "marriage is just pair programming without the programming",
+    "pov: you typed `!matr blorp` expecting wisdom - close enough",
+]
+
+
 def _help_embed(prefix: str, cmd: str) -> discord.Embed:
+    quips = "\n".join(f"\u00b7 {q}" for q in _HELP_QUIPS)
     return discord.Embed(
         title="Matrimony",
         description=(
@@ -565,7 +617,8 @@ def _help_embed(prefix: str, cmd: str) -> discord.Embed:
             "Family trees are global across servers, and bot accounts can "
             "use commands and be married or adopted. Users may have multiple "
             "partners; existing partners are notified of each new marriage "
-            "and may acknowledge it or divorce on the spot."
+            "and may acknowledge it or divorce on the spot.\n\n"
+            f"**Marital wisdom**\n{quips}"
         ),
         colour=GOLD,
     )
@@ -583,8 +636,23 @@ def _help_embed(prefix: str, cmd: str) -> discord.Embed:
     description="Matrimony family-tree commands.",
 )
 async def matr(ctx: commands.Context) -> None:
-    """Bare ``!matr`` shows help."""
+    """Bare ``!matr`` shows help; ``!matr <unknown>`` earns a quip.
+
+    With ``invoke_without_command=True`` the group's callback runs even
+    when the first word isn't a real subcommand — the parser rewinds the
+    view and invokes us as a plain command, so any leftover text means the
+    user typed an action that doesn't exist (`!matr blorp`)."""
     bot = _bot(ctx)
+    view = getattr(ctx, "view", None)
+    leftover = (
+        view.buffer[view.index:].strip() if view is not None else ""
+    )
+    if leftover:
+        await ctx.reply(
+            content=_quip("unknown"),
+            embed=_help_embed(ctx.prefix or "!", bot.config.command_name),
+        )
+        return
     await ctx.reply(
         embed=_help_embed(ctx.prefix or "!", bot.config.command_name)
     )
@@ -1186,11 +1254,17 @@ for _verb_name in _FUN_VERBS:
 async def matr_ship(
     ctx: commands.Context, a: discord.User, b: discord.User | None = None
 ) -> None:
-    """Show a (deterministic) ship percentage between two users."""
+    """Show the drifting ship percentage between two users."""
+    bot = _bot(ctx)
     b = b or ctx.author
-    lo, hi = sorted((a.id, b.id))
-    pct = int(hashlib.md5(f"{lo}:{hi}".encode()).hexdigest()[:6], 16) % 101
-    gif = await _bot(ctx).gifs.fetch_url("handhold")
+    now = time.time()
+    pct = ship_score(
+        a.id,
+        b.id,
+        now=now,
+        message_count=bot.channel_activity.count(ctx.channel.id, now),
+    )
+    gif = await bot.gifs.fetch_url("handhold")
     text = f"{a.mention} x {b.mention}: **{pct}%** :heart:"
     if _is_matrimony(ctx, a) or _is_matrimony(ctx, b):
         text += f"\n-# {_quip('ship')}"
@@ -1466,11 +1540,14 @@ class MatrCog(commands.Cog):
     ) -> None:
         error = getattr(error, "original", error)
         if isinstance(error, commands.CommandNotFound):
-            # Unknown `!matr <action>` -> show help instead of silence.
+            # Unknown `!matr <action>` -> a quip plus the help embed.
+            # (Usually the group callback answers this first via
+            # ``subcommand_passed``; this path catches any other
+            # CommandNotFound raised against the matr group.)
             content = ctx.message.content.split()
             if len(content) >= 2 and content[0].endswith(self.bot.config.command_name):
                 await ctx.reply(
-                    content="Unknown action.",
+                    content=_quip("unknown"),
                     embed=_help_embed(ctx.prefix or "!", self.bot.config.command_name),
                 )
             return

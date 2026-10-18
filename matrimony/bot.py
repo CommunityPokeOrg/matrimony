@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 
 import discord
 from discord.ext import commands
@@ -10,6 +11,7 @@ from discord.ext import commands
 from .config import Config
 from .family import FamilyView
 from .gifs import FluxpointClient
+from .ship import ChannelActivity
 from .store import Store
 
 log = logging.getLogger("matrimony")
@@ -39,6 +41,8 @@ class MatrimonyBot(commands.Bot):
         self.store = store or Store(config.database_path)
         self.family = FamilyView(self.store)
         self.gifs = FluxpointClient(config.fluxpoint_api_key)
+        # Named channel_activity: ``Client.activity`` is the presence field.
+        self.channel_activity = ChannelActivity()
 
     # ------------------------------------------------------------- prefixes
 
@@ -88,6 +92,11 @@ class MatrimonyBot(commands.Bot):
         await self.invoke(ctx)
 
     async def on_message(self, message: discord.Message) -> None:
+        # Every observed message feeds the per-channel activity window
+        # (human and bot authors alike, including our own replies) — it
+        # powers the channel-busyness nudge in `matr ship`. Dispatching is
+        # still governed by ``should_process``.
+        self.channel_activity.note(message.channel.id, time.time())
         if not self.should_process(message):
             return
         await self.process_commands(message)
