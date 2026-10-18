@@ -2,8 +2,10 @@
 
 from test_dispatch import BOT_USER_ID, ctx_for, make_bot, run, user
 
+from matrimony import quips
 from matrimony.cogs import matr as matr_mod
-from matrimony.cogs.matr import _BOT_QUIPS, _quip
+
+_BOT_QUIPS = quips.BOT
 
 
 def _reply_text(ctx) -> str:
@@ -32,17 +34,53 @@ def test_fun_command_at_bot_appends_subtext_quip() -> None:
     assert lines[1][3:] in _BOT_QUIPS["hug"]
 
 
-def test_fun_command_at_normal_user_has_no_quip() -> None:
+def test_fun_command_at_normal_user_gets_ambient_quip() -> None:
+    """Every reply ends with ambient commentary - aimed at a normal user
+    it draws from the shared fun pool, not the bot-directed one."""
     bot = make_bot()
     ctx = ctx_for(bot, user(1))
     run(matr_mod.matr.get_command("hug").callback(ctx, user(2)))
-    assert "-#" not in _reply_text(ctx)
+    lines = _reply_text(ctx).split("\n")
+    assert lines[-1].startswith("-# ")
+    assert lines[-1][3:] in quips.AMBIENT["fun"]
 
 
 def test_quips_rotate_through_the_set() -> None:
     kind = "tickle"
-    seen = {_quip(kind) for _ in range(len(_BOT_QUIPS[kind]))}
+    seen = {
+        quips.quip(f"bot:{kind}") for _ in range(len(_BOT_QUIPS[kind]))
+    }
     assert seen == set(_BOT_QUIPS[kind])
+
+
+def test_ordinary_replies_end_with_ambient_subtext() -> None:
+    """Basically every command reply ends with a `-# ` ambient quip from
+    the command's own pool."""
+    bot = make_bot()
+    bot.store.add_partners(1, 2)
+    bot.store.add_block(1, 3)
+    cases = [
+        (matr_mod.matr_divorce.callback, (user(1), user(2)), "divorce"),
+        (matr_mod.matr_partners.callback, (user(1), None), "partners"),
+        (matr_mod.matr_blocked.callback, (user(1),), "block"),
+        (matr_mod.matr_familysize.callback, (user(1), None), "kin"),
+    ]
+    for callback, args, kind in cases:
+        ctx = ctx_for(bot, args[0])
+        run(callback(ctx, *args[1:]))
+        lines = _reply_text(ctx).split("\n")
+        assert lines[-1].startswith("-# ")
+        assert lines[-1][3:] in quips.AMBIENT[kind]
+
+
+def test_error_replies_quip_too() -> None:
+    """Even a failure reply carries ambient commentary (generic pool)."""
+    bot = make_bot()
+    ctx = ctx_for(bot, user(1))
+    run(matr_mod.matr_accept.callback(ctx, None))
+    lines = _reply_text(ctx).split("\n")
+    assert lines[-1].startswith("-# ")
+    assert lines[-1][3:] in quips.AMBIENT["generic"]
 
 
 def test_marry_at_bot_is_declined_with_quip() -> None:
@@ -87,7 +125,7 @@ def test_flirt_sends_a_pickup_line() -> None:
     run(matr_mod.matr_flirt.callback(ctx, user(2)))
     text = _reply_text(ctx)
     assert "to <@2>" in text
-    assert any(line in text for line in matr_mod._PICKUP_LINES)
+    assert any(line in text for line in quips.PICKUP_LINES)
 
 
 def test_date_suggests_an_idea() -> None:
@@ -96,7 +134,7 @@ def test_date_suggests_an_idea() -> None:
     run(matr_mod.matr_date.callback(ctx, user(2)))
     text = _reply_text(ctx)
     assert "takes <@2>" in text
-    assert any(idea in text for idea in matr_mod._DATE_IDEAS)
+    assert any(idea in text for idea in quips.DATE_IDEAS)
 
 
 def test_anniversary_unmarried_is_rejected() -> None:

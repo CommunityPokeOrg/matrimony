@@ -14,19 +14,22 @@ from test_dispatch import (
     wire_message,
 )
 
-from matrimony.cogs import matr as matr_mod
-from matrimony.cogs.matr import (
-    _HELP_QUIPS,
-    _UNKNOWN_QUIPS,
-    MatrCog,
-    _help_embed,
-)
+from matrimony import quips
+from matrimony.cogs.matr import MatrCog, _help_embed
+
+_HELP_QUIPS = quips.HELP
+_UNKNOWN_QUIPS = quips.UNKNOWN
 
 
 def _sent_payload(send: AsyncMock) -> dict:
     """The payload of the last stubbed http.send_message call."""
     params = send.call_args.kwargs["params"]
     return params.payload if hasattr(params, "payload") else params
+
+
+def _content_quip(payload: dict) -> str:
+    """The `-# <quip>` subtext that makes up a reply's content."""
+    return payload["content"].removeprefix("-# ")
 
 
 def _wisdom_lines(description: str) -> list[str]:
@@ -112,7 +115,8 @@ def test_unknown_subcommand_gets_a_quip() -> None:
     run(bot.process_commands(wire_message(bot, user(1), "!matr blorp")))
     send.assert_awaited_once()
     payload = _sent_payload(send)
-    assert payload["content"] in _UNKNOWN_QUIPS
+    assert payload["content"].startswith("-# ")
+    assert _content_quip(payload) in _UNKNOWN_QUIPS
     assert "MarriageBot-style" in payload["embeds"][0]["description"]
 
 
@@ -124,11 +128,13 @@ def test_unknown_subcommand_with_extra_words_still_quips() -> None:
             wire_message(bot, user(1), "!matr blorp and some more words")
         )
     )
-    assert _sent_payload(send)["content"] in _UNKNOWN_QUIPS
+    payload = _sent_payload(send)
+    assert payload["content"].startswith("-# ")
+    assert _content_quip(payload) in _UNKNOWN_QUIPS
 
 
 def test_unknown_quips_rotate() -> None:
-    seen = {matr_mod._quip("unknown") for _ in range(len(_UNKNOWN_QUIPS))}
+    seen = {quips.quip("unknown") for _ in range(len(_UNKNOWN_QUIPS))}
     assert seen == set(_UNKNOWN_QUIPS)
 
 
@@ -172,7 +178,9 @@ def test_unknown_subcommand_from_bot_author_still_quips() -> None:
             wire_message(bot, user(2, bot=True), "!matr blorp")
         )
     )
-    assert _sent_payload(send)["content"] in _UNKNOWN_QUIPS
+    payload = _sent_payload(send)
+    assert payload["content"].startswith("-# ")
+    assert _content_quip(payload) in _UNKNOWN_QUIPS
 
 
 def test_command_not_found_handler_also_quips() -> None:
@@ -192,4 +200,6 @@ def test_command_not_found_handler_also_quips() -> None:
         )
     )
     ctx.reply.assert_awaited_once()
-    assert ctx.reply.call_args.kwargs["content"] in _UNKNOWN_QUIPS
+    content = ctx.reply.call_args.kwargs["content"]
+    assert content.startswith("-# ")
+    assert content.removeprefix("-# ") in _UNKNOWN_QUIPS

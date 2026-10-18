@@ -56,13 +56,18 @@ All commands live under one group, `matr`, invoked with a per-guild prefix
   pinned forever, and busy channels nudge it: the score includes the
   rolling count of channel messages over the last 10 minutes (a small,
   bounded in-memory window fed by every observed message, bots included).
-- **Bot-directed quips** — aiming an action at Matrimony itself appends a
-  rotating one-liner as Discord subtext (a `-# ` line) under the normal
-  reply, and proposals at the bot are declined outright ("sorry, taken by
-  discord.py").
+- **Ambient quips everywhere** — basically every command reply ends with
+  one rotating one-liner of commentary, rendered as Discord subtext (a
+  `-# ` line) at the bottom of the embed or message. All quips live in a
+  single file (`matrimony/quips.py`) organized by command and theme:
+  marriage, divorce, trees, blocks, law, admin, fun actions, meta, and
+  more.
+- **Bot-directed quips** — aiming an action at Matrimony itself swaps the
+  ambient line for one from the bot's own pool, and proposals at the bot
+  are declined outright ("sorry, taken by discord.py").
 - **Unknown-action quips** — `!matr blorp` (or any nonexistent action)
-  gets a rotating funny quip plus the help embed, never silence. The
-  bot's own messages never trigger it.
+  gets a rotating funny quip as subtext plus the help embed, never
+  silence. The bot's own messages never trigger it.
 - **Marital wisdom** — `!matr help` (and bare `!matr`) ends with one
   randomly chosen quip about memes, Discord culture, programming, and
   relationships, rendered as Discord subtext below the full command
