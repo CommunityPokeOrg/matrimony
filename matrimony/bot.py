@@ -76,18 +76,36 @@ class MatrimonyBot(commands.Bot):
         allowed = self.config.allowed_channels.get(guild.id)
         return allowed is None or message.channel.id in allowed
 
+    @staticmethod
+    def _command_line(content: str, prefixes: list[str]) -> str | None:
+        """The first line of ``content`` starting with a command prefix.
+
+        Commands don't have to open the message: chatter may come first
+        and the command can sit on any later line ("hey all\\n!matr
+        partners"). The rest of the message is commentary, not arguments.
+        Leading whitespace on the command line is tolerated."""
+        for line in content.splitlines():
+            candidate = line.lstrip()
+            if any(candidate.startswith(prefix) for prefix in prefixes):
+                return candidate
+        return None
+
     async def process_commands(self, message: discord.Message) -> None:
         """Dispatch ``message`` as a command.
 
         discord.py's built-in version silently drops every message whose
         author is a bot; bots are first-class users here, so the parser only
         skips this bot's own messages (``should_process``). Stray whitespace
-        around the command text is tolerated."""
+        around the command text is tolerated, and a command works from any
+        line of the message, not just the first."""
         if not self.should_process(message):
             return
         content = message.content.strip()
-        if content != message.content:
-            message.content = content
+        prefixes = await self.get_prefix(message)
+        command_line = self._command_line(content, prefixes)
+        message.content = (
+            command_line if command_line is not None else content
+        )
         ctx = await self.get_context(message)
         await self.invoke(ctx)
 

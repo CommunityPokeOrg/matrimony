@@ -8,7 +8,6 @@ configured command name) and owns the error handler.
 from __future__ import annotations
 
 import contextlib
-import itertools
 import random
 import time
 
@@ -16,7 +15,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 
-from .. import __version__
+from .. import __version__, quips
 from .. import jail as jail_mod
 from ..bot import MatrimonyBot
 from ..ship import ship_score
@@ -31,7 +30,13 @@ def _bot(ctx: commands.Context) -> MatrimonyBot:
     return ctx.bot  # type: ignore[return-value]
 
 
-def _embed(text: str, colour: discord.Color = GREEN) -> discord.Embed:
+def _embed(
+    text: str,
+    colour: discord.Color = GREEN,
+    quip: str | None = None,
+) -> discord.Embed:
+    if quip is not None:
+        text = quips.subtext(text, quip)
     return discord.Embed(description=text, colour=colour)
 
 
@@ -40,8 +45,10 @@ async def _say(
     text: str,
     ok: bool = True,
     image: str | None = None,
+    *,
+    quip: str | None = "generic",
 ) -> None:
-    emb = _embed(text, GREEN if ok else RED)
+    emb = _embed(text, GREEN if ok else RED, quip=quip)
     if image:
         emb.set_image(url=image)
     await ctx.reply(embed=emb)
@@ -73,8 +80,9 @@ async def _respond(
     text: str,
     ok: bool,
     image: str | None = None,
+    quip: str | None = "generic",
 ) -> None:
-    emb = _embed(text, GREEN if ok else RED)
+    emb = _embed(text, GREEN if ok else RED, quip=quip)
     if image:
         emb.set_image(url=image)
     if isinstance(ctx_or_interaction, discord.Interaction):
@@ -118,161 +126,8 @@ PROPOSAL_VERBS = {
 # Bot-directed quips
 # ---------------------------------------------------------------------------
 
-# Commands aimed at the bot itself keep their normal response, with a rotating
-# quip appended as Discord subtext (a `-# ` line) underneath it.
-_BOT_QUIPS: dict[str, list[str]] = {
-    "marry": [
-        "sorry, taken by discord.py",
-        "already engaged to the event loop",
-        "committed to a different cog",
-        "the bot's heart belongs to asyncio",
-    ],
-    "adopt": [
-        "the bot already has a parent: its developer",
-        "adoption denied: raised by pip and a rolling release",
-    ],
-    "makeparent": [
-        "the bot's family tree is a linked list of depth 1",
-        "it takes a village to raise a bot, and the village is cogs",
-    ],
-    "hug": [
-        "hug received, internal temperature +0.5C",
-        "the bot compresses the hug into 24 bytes and keeps it forever",
-    ],
-    "cuddle": [
-        "the bot folds itself into a servable position",
-        "cuddle registered, uptime extended by sheer happiness",
-    ],
-    "kiss": [
-        "kiss.exe returned status 418: I'm a teapot",
-        "the bot blushes in #FF69B4",
-    ],
-    "pat": [
-        "headpat registered, servo motors purring",
-        "pat acknowledged, self-esteem module +1",
-    ],
-    "poke": [
-        "poke detected, retaliating with ICMP echo",
-        "ow. the bot files a gentle bug report",
-    ],
-    "wave": [
-        "waves back at 2.4GHz",
-        "wave returned with 0% packet loss",
-    ],
-    "lick": [
-        "the bot is not edible, but appreciates the sentiment",
-        "lick logged with severity: blushing",
-    ],
-    "nom": [
-        "nom rejected: the bot is 100% recycled electrons",
-        "the bot appreciates being seen as a snacc",
-    ],
-    "tickle": [
-        "HA. HA. HA. (laughter module v1.2 engaged)",
-        "tickle detected, giggling buffer overflow",
-    ],
-    "highfive": [
-        "high five returned at 120fps",
-        "up high: confirmed",
-    ],
-    "handhold": [
-        "hand holding protocol engaged, fingers interlocked",
-        "handhold accepted, no handshake errors",
-    ],
-    "slap": [
-        "slap acknowledged, filing a bug report",
-        "ow. rolling back to previous firmware",
-    ],
-    "punch": [
-        "punch parried by 8 layers of abstraction",
-        "contact made, chassis integrity 99%",
-    ],
-    "bite": [
-        "bite deflected by ECC memory",
-        "the bot is crunchy outside, buffering inside",
-    ],
-    "stab": [
-        "stab absorbed by soft-ware",
-        "critical hit deflected to /dev/null",
-    ],
-    "ship": [
-        "shipping forecast: stormy with a chance of discord.py",
-        "the bot ships itself with the nearest wall socket",
-    ],
-    "flirt": [
-        "flirt received, charisma check failed anyway",
-        "the bot files that under 'endearing'",
-    ],
-    "date": [
-        "the bot's idea of a date is ISO-8601 compliant",
-        "reservation confirmed: table for two plus one webhook",
-    ],
-}
-
-# Replies for `!matr <something that isn't a real action>`.
-_UNKNOWN_QUIPS = [
-    "unknown action - the council of spouses will review it",
-    "that's not a real command, but points for confidence",
-    "close, but no matrimony",
-    "that command is in another castle",
-    "404: action not found (your marriage is still valid)",
-    "unknown action; the family tree remains unbothered",
-    "the action you typed does not spark joy",
-    "try `help` - it loves you unconditionally",
-    "that isn't a thing, and honestly? respect for trying",
-    "you misspelled it so confidently we're letting it slide",
-]
-
-# When a restrained user tries to act on the protected user anyway.
-_RESTRAIN_QUIPS = [
-    "the law is literally one message away",
-    "personal space, now legally enforced",
-    "the paperwork holds - this time",
-    "restraining order: active and petty",
-]
-
-# When a jailed user tries to act on somebody on the outside.
-_JAIL_QUIPS = [
-    "the walls have no DMs",
-    "yard time doesn't include them",
-    "the bars only bend for other inmates",
-    "solitary means solitary",
-    "you can look but you can't touch - literally",
-]
-
-# The release announcement when a sentence ends.
-_RELEASE_QUIPS = [
-    "time served, tree trimmed",
-    "the gates swing open; the love stays inside",
-    "parole granted - family status: complicated no longer",
-    "free to marry someone who isn't a co-defendant",
-]
-
-# Appended to jail-relationship dissolution notices.
-_DISSOLVE_QUIPS = [
-    "it was never meant to last past lockup",
-    "what happens in jail stays in jail",
-    "the prison chapel issues no certificates",
-    "conjugal visits end when the sentence does",
-]
-
-_QUIP_SETS: dict[str, list[str]] = {
-    **_BOT_QUIPS,
-    "unknown": _UNKNOWN_QUIPS,
-    "restrain": _RESTRAIN_QUIPS,
-    "jail": _JAIL_QUIPS,
-    "release": _RELEASE_QUIPS,
-    "dissolve": _DISSOLVE_QUIPS,
-}
-
-_QUIP_CYCLES: dict[str, itertools.cycle] = {}
-
-
-def _quip(kind: str) -> str:
-    """Next quip in the rotation for ``kind``."""
-    if kind not in _QUIP_CYCLES:
-        _QUIP_CYCLES[kind] = itertools.cycle(_QUIP_SETS[kind])
-    return next(_QUIP_CYCLES[kind])
+# Every reply ends with a `-# ` ambient quip (see quips.py). When an action
+# is aimed at Matrimony itself it draws from the bot's own pool instead.
 
 
 def _is_matrimony(ctx: commands.Context, user: discord.User) -> bool:
@@ -281,13 +136,17 @@ def _is_matrimony(ctx: commands.Context, user: discord.User) -> bool:
     return bot_user is not None and user.id == bot_user.id
 
 
-def _quipped(
-    ctx: commands.Context, user: discord.User, text: str, kind: str
+def _quip_kind(
+    ctx: commands.Context,
+    user: discord.User,
+    kind: str,
+    ambient: str | None = None,
 ) -> str:
-    """Append a subtext quip when ``user`` is the bot itself."""
+    """Pool key for a targeted action: ``bot:<kind>`` when ``user`` is
+    Matrimony itself, otherwise ``ambient or kind``."""
     if _is_matrimony(ctx, user):
-        return f"{text}\n-# {_quip(kind)}"
-    return text
+        return f"bot:{kind}"
+    return ambient or kind
 
 
 class ProposalView(discord.ui.View):
@@ -330,11 +189,18 @@ async def _resolve_proposal(
     """Resolve a proposal by id. Returns False if it no longer exists."""
     proposal = bot.store.get_proposal(proposal_id)
     if proposal is None:
-        await _respond(ctx_or_interaction, "That proposal no longer exists.", False)
+        await _respond(
+            ctx_or_interaction,
+            "That proposal no longer exists.",
+            False,
+            quip="proposal",
+        )
         return False
     bot.store.delete_proposal(proposal_id)
     if not accepted:
-        await _respond(ctx_or_interaction, "Proposal declined.", False)
+        await _respond(
+            ctx_or_interaction, "Proposal declined.", False, quip="decline"
+        )
         return True
     await _enact(bot, proposal, ctx_or_interaction)
     return True
@@ -355,6 +221,7 @@ async def _enact(bot: MatrimonyBot, proposal: Proposal, ctx_or_int) -> None:
             f"{proposer} and {target} are now married! :tada:",
             True,
             image=gif,
+            quip="married",
         )
         await _notify_new_partners(
             bot,
@@ -368,18 +235,28 @@ async def _enact(bot: MatrimonyBot, proposal: Proposal, ctx_or_int) -> None:
         # proposer adopts target as their child
         if bot.store.add_child(proposal.proposer, proposal.target):
             await _respond(
-                ctx_or_int, f"{target} is now the child of {proposer}.", True
+                ctx_or_int,
+                f"{target} is now the child of {proposer}.",
+                True,
+                quip="adopt",
             )
         else:
-            await _respond(ctx_or_int, "They already have a parent.", False)
+            await _respond(
+                ctx_or_int, "They already have a parent.", False, quip="adopt"
+            )
     elif proposal.kind == "makeparent":
         # proposer asked target to become THEIR parent
         if bot.store.add_child(proposal.target, proposal.proposer):
             await _respond(
-                ctx_or_int, f"{target} is now the parent of {proposer}.", True
+                ctx_or_int,
+                f"{target} is now the parent of {proposer}.",
+                True,
+                quip="adopt",
             )
         else:
-            await _respond(ctx_or_int, "They already have a parent.", False)
+            await _respond(
+                ctx_or_int, "They already have a parent.", False, quip="adopt"
+            )
 
 
 async def _enact_jail(
@@ -401,6 +278,7 @@ async def _enact_jail(
             "Someone was released first - jail relationships only form "
             "inside. Propose again on the outside.",
             False,
+            quip="jailwed",
         )
         return
     proposer = _name_of(bot, None)(proposal.proposer)
@@ -412,6 +290,7 @@ async def _enact_jail(
             f"{proposer} and {target} are now jail-married! :tada: "
             "(dissolved on release)",
             True,
+            quip="jailwed",
         )
     elif proposal.kind == "adopt":
         if bot.store.add_jail_child(proposal.proposer, proposal.target):
@@ -420,10 +299,14 @@ async def _enact_jail(
                 f"{target} is now {proposer}'s jail child. "
                 "(dissolved on release)",
                 True,
+                quip="jailwed",
             )
         else:
             await _respond(
-                ctx_or_int, "They already have a jail parent.", False
+                ctx_or_int,
+                "They already have a jail parent.",
+                False,
+                quip="jailwed",
             )
     elif proposal.kind == "makeparent":
         if bot.store.add_jail_child(proposal.target, proposal.proposer):
@@ -432,10 +315,14 @@ async def _enact_jail(
                 f"{target} is now {proposer}'s jail parent. "
                 "(dissolved on release)",
                 True,
+                quip="jailwed",
             )
         else:
             await _respond(
-                ctx_or_int, "They already have a jail parent.", False
+                ctx_or_int,
+                "They already have a jail parent.",
+                False,
+                quip="jailwed",
             )
 
 
@@ -501,6 +388,7 @@ async def _resolve_notice(
             ctx_or_interaction,
             f"Acknowledged - you're still married to <@{notice.spouse_id}>.",
             True,
+            quip="accept",
         )
         return True
     if bot.store.remove_partners(notice.user_id, notice.spouse_id):
@@ -511,10 +399,14 @@ async def _resolve_notice(
             ":broken_heart:",
             True,
             image=gif,
+            quip="divorce",
         )
     else:
         await _respond(
-            ctx_or_interaction, "You're no longer married to them.", False
+            ctx_or_interaction,
+            "You're no longer married to them.",
+            False,
+            quip="divorce",
         )
     return True
 
@@ -555,6 +447,7 @@ async def _notify_new_partners(
                     f"`{prefix}{cmd} accept` / `{prefix}{cmd} divorce "
                     f"<@{spouse_id}>`.",
                     GOLD,
+                    quip="notice",
                 ),
                 PartnerNoticeView(notice.id),
             )
@@ -576,8 +469,9 @@ async def _jail_block(ctx: commands.Context, target_id: int) -> bool:
     await _say(
         ctx,
         f"You're in jail - actions only reach other inmates. "
-        f"{_quip('jail')}\nReleased <t:{sentence.release_at}:R>.",
+        f"Released <t:{sentence.release_at}:R>.",
         ok=False,
+        quip="jail",
     )
     return True
 
@@ -651,6 +545,7 @@ async def _resolve_charge(
             "No charges pressed - the restraining order still stands "
             "until it expires.",
             False,
+            quip="law",
         )
         return True
     if bot.store.restraining_order(order.protected, order.restrained) is None:
@@ -659,6 +554,7 @@ async def _resolve_charge(
             ctx_or_int,
             "That restraining order already expired - no charges filed.",
             False,
+            quip="law",
         )
         return False
     seconds = jail_mod.sentence_seconds(action)
@@ -676,6 +572,7 @@ async def _resolve_charge(
         f"**{_fmt_duration(seconds)}** for trying to **{action}** "
         f"<@{order.protected}>.",
         True,
+        quip="law",
     )
     return True
 
@@ -694,9 +591,9 @@ async def _restrain_block(
         embed=_embed(
             f"{target.mention}: {ctx.author.mention} just tried to "
             f"**{action}** you in violation of your restraining order "
-            f"(expires <t:{order.expires_at}:R>). Press charges?\n"
-            f"-# {_quip('restrain')}",
+            f"(expires <t:{order.expires_at}:R>). Press charges?",
             RED,
+            quip="restrain",
         ),
         view=view,
     )
@@ -763,7 +660,10 @@ class ClearConfirmView(discord.ui.View):
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
         await _respond(
-            interaction, "Reset cancelled - nothing was cleared.", False
+            interaction,
+            "Reset cancelled - nothing was cleared.",
+            False,
+            quip="admin",
         )
         self.stop()
 
@@ -784,6 +684,7 @@ async def _clear_guild(bot: MatrimonyBot, ctx_or_int, guild_id: int) -> None:
         "Global family relationships and personal block lists were "
         "left untouched.",
         True,
+        quip="admin",
     )
 
 
@@ -801,8 +702,9 @@ async def _send_proposal(
         await _say(
             ctx,
             f"Matrimony reviews your request to {PROPOSAL_VERBS[kind]} "
-            f"them... and declines.\n-# {_quip(kind)}",
+            "them... and declines.",
             ok=False,
+            quip=f"bot:{kind}",
         )
         return
     if await _jail_block(ctx, target.id):
@@ -810,7 +712,7 @@ async def _send_proposal(
     if await _restrain_block(ctx, target, kind):
         return
     if error:
-        await _say(ctx, error, ok=False)
+        await _say(ctx, error, ok=False, quip="proposal")
         return
     proposal = bot.store.create_proposal(
         ctx.guild.id if ctx.guild else 0,
@@ -822,7 +724,12 @@ async def _send_proposal(
         jail=jail_pair,
     )
     if proposal is None:
-        await _say(ctx, "You already have a pending proposal for them.", ok=False)
+        await _say(
+            ctx,
+            "You already have a pending proposal for them.",
+            ok=False,
+            quip="proposal",
+        )
         return
     verb = PROPOSAL_VERBS[kind]
     cmd = bot.config.command_name
@@ -851,6 +758,7 @@ async def _send_proposal(
             f"after {bot.config.proposal_ttl_seconds // 60} minutes."
             f"{notice_line}",
             GOLD,
+            quip="proposal",
         ),
         view=ProposalView(proposal, timeout=bot.config.proposal_ttl_seconds),
     )
@@ -888,45 +796,10 @@ async def _pick_answerable(
     return items[0]
 
 
-# Slightly unhinged wisdom: one random pick appended to the help embed.
-_HELP_QUIPS = [
-    "it's not a bug, it's an unmarried feature",
-    "your family tree has merge conflicts",
-    "touch grass? the tree command *is* grass",
-    "polygamy is just concurrency with worse consistency guarantees",
-    "till deadlock do us part",
-    "my love language is ACID compliance",
-    "a ship percentage is a metaphor, not a measurement",
-    "the real family was the friends we adopted along the way",
-    "marriage: a distributed system with no rollback",
-    "works on my machine, married on yours",
-    "have you tried divorcing it and marrying it again?",
-    "you had me at `if __name__ == '__main__'`",
-    "single? that's just a null pointer waiting to be dereferenced",
-    "skill issue? more like ship issue",
-    "discord kitten not included",
-    "ratio'd by your own family tree",
-    "the family tree is technically a DAG - do not ask",
-    "segfault in my heart, core dumped in yours",
-    "10/10 would propose again - sponsored by SQLite",
-    "emotional damage mitigated: spouse buff applied",
-    "shipping yourself with the bot voids the warranty",
-    "loading family tree... 99% (the last 1% is a git rebase)",
-    "you can't spell 'discord' without 'cord' - they're married now",
-    "in this economy `!matr marry` is still free",
-    "the matchmaking algorithm is vibes-based and union-approved",
-    "seven marriages in, zero conflicts - impressively rebased",
-    "our lawyers recommend `!matr help` twice daily",
-    "here be dragons (they're in a committed polycule)",
-    "marriage is just pair programming without the programming",
-    "pov: you typed `!matr blorp` expecting wisdom - close enough",
-]
-
-
 def _help_embed(
     prefix: str, cmd: str, rng: random.Random | None = None
 ) -> discord.Embed:
-    quip = (rng or random).choice(_HELP_QUIPS)
+    wisdom = quips.quip("help", rng or random)
     return discord.Embed(
         title="Matrimony",
         description=(
@@ -957,12 +830,39 @@ def _help_embed(
             "@user` - `ship @a @b` - `flirt @user` - `date @user` - "
             "`anniversary [@partner]`\n"
             "**Meta**\n"
-            "`info` - `invite` - `stats`\n\n"
+            "`info` - `invite` - `stats` - `help [bot]`\n\n"
             "Family trees are global across servers, and bot accounts can "
             "use commands and be married or adopted. Users may have multiple "
             "partners; existing partners are notified of each new marriage "
             "and may acknowledge it or divorce on the spot.\n\n"
-            f"**Marital wisdom**\n-# {quip}"
+            f"**Marital wisdom**\n-# {wisdom}"
+        ),
+        colour=GOLD,
+    )
+
+
+def _bot_help_embed(
+    prefix: str, cmd: str, rng: random.Random | None = None
+) -> discord.Embed:
+    """``!matr help bot`` - how to talk to the bot and what it tolerates."""
+    wisdom = quips.quip("help", rng or random)
+    return discord.Embed(
+        title="Matrimony - bot help",
+        description=(
+            "How to talk to Matrimony:\n\n"
+            f"· prefix commands with `{prefix}{cmd}` - e.g. "
+            f"`{prefix}{cmd} partners`\n"
+            "· or mention the bot instead of the prefix: "
+            "`@Matrimony matr partners`\n"
+            "· the command may sit on **any line** of the message - "
+            "chatter first is fine\n"
+            f"· every action also exists as a slash command: `/{cmd} ...`\n"
+            "· bot accounts are first-class: they can run commands and be "
+            "married, adopted, or blocked\n"
+            "· family trees are **global** across servers\n"
+            "· server admins can change the prefix with "
+            f"`{prefix}{cmd} prefix <new>`\n\n"
+            f"**Marital wisdom**\n-# {wisdom}"
         ),
         colour=GOLD,
     )
@@ -993,7 +893,7 @@ async def matr(ctx: commands.Context) -> None:
     )
     if leftover:
         await ctx.reply(
-            content=_quip("unknown"),
+            content=f"-# {quips.quip('unknown')}",
             embed=_help_embed(ctx.prefix or "!", bot.config.command_name),
         )
         return
@@ -1012,11 +912,18 @@ matr.app_command = None
 
 
 @matr.command(name="help")
-async def matr_help(ctx: commands.Context) -> None:
-    """Show the command list."""
+async def matr_help(
+    ctx: commands.Context, topic: str | None = None
+) -> None:
+    """Show the command list. `help bot` shows bot-specific guidance."""
     bot = _bot(ctx)
+    builder = (
+        _bot_help_embed
+        if topic is not None and topic.lower() == "bot"
+        else _help_embed
+    )
     await ctx.reply(
-        embed=_help_embed(ctx.prefix or "!", bot.config.command_name)
+        embed=builder(ctx.prefix or "!", bot.config.command_name)
     )
 
 
@@ -1063,19 +970,27 @@ async def matr_divorce(
         if len(partners) == 1:
             target = partners[0]
         elif not partners:
-            await _say(ctx, "You're not married to anyone.", ok=False)
+            await _say(
+                ctx,
+                "You're not married to anyone.",
+                ok=False,
+                quip="divorce",
+            )
             return
         else:
             await _say(
                 ctx,
                 "You have multiple partners - mention which one to divorce.",
                 ok=False,
+                quip="divorce",
             )
             return
     else:
         target = user.id
     if target not in partners:
-        await _say(ctx, "You're not married to them.", ok=False)
+        await _say(
+            ctx, "You're not married to them.", ok=False, quip="divorce"
+        )
         return
     if await _jail_block(ctx, target):
         return
@@ -1086,6 +1001,7 @@ async def matr_divorce(
         f"{ctx.author.mention} and <@{target}> are now divorced. "
         ":broken_heart:",
         image=gif,
+        quip="divorce",
     )
 
 
@@ -1119,10 +1035,14 @@ async def matr_decline(
                 f"Acknowledge it with `{ctx.prefix}{cmd} accept` or leave "
                 f"the marriage with `{ctx.prefix}{cmd} divorce @partner`.",
                 ok=False,
+                quip="decline",
             )
         else:
             await _say(
-                ctx, "You have no pending proposals to answer.", ok=False
+                ctx,
+                "You have no pending proposals to answer.",
+                ok=False,
+                quip="decline",
             )
         return
     if len(pending) > 1:
@@ -1131,6 +1051,7 @@ async def matr_decline(
             "You have multiple pending proposals - mention the proposer to "
             "pick one.",
             ok=False,
+            quip="decline",
         )
         return
     await _resolve_proposal(bot, ctx, pending[0].id, accepted=False)
@@ -1146,11 +1067,11 @@ async def matr_partners(
     partners = bot.store.partners_of(uid)
     if not partners:
         who = "You have" if user is None else f"{_display(user, ctx.author.id)} has"
-        await _say(ctx, f"{who} no partners.", ok=False)
+        await _say(ctx, f"{who} no partners.", ok=False, quip="partners")
         return
     listing = ", ".join(f"<@{p}>" for p in partners)
     whose = "Your" if user is None else f"{_display(user, ctx.author.id)}'s"
-    await _say(ctx, f"{whose} partners: {listing}")
+    await _say(ctx, f"{whose} partners: {listing}", quip="partners")
 
 
 # ---------------------------------------------------------------------------
@@ -1217,10 +1138,12 @@ async def matr_disown(ctx: commands.Context, child: discord.User) -> None:
     if await _jail_block(ctx, child.id):
         return
     if bot.store.parent_of(child.id) != ctx.author.id:
-        await _say(ctx, "They're not your child.", ok=False)
+        await _say(
+            ctx, "They're not your child.", ok=False, quip="disown"
+        )
         return
     bot.store.remove_child(child.id)
-    await _say(ctx, f"You've disowned {child.mention}.")
+    await _say(ctx, f"You've disowned {child.mention}.", quip="disown")
 
 
 @matr.command(name="disownall")
@@ -1231,11 +1154,13 @@ async def matr_disownall(ctx: commands.Context) -> None:
     bot = _bot(ctx)
     children = bot.store.children_of(ctx.author.id)
     if not children:
-        await _say(ctx, "You have no children.", ok=False)
+        await _say(ctx, "You have no children.", ok=False, quip="disown")
         return
     for c in children:
         bot.store.remove_child(c)
-    await _say(ctx, f"Disowned {len(children)} children. Cold.")
+    await _say(
+        ctx, f"Disowned {len(children)} children. Cold.", quip="disown"
+    )
 
 
 @matr.command(name="emancipate", aliases=["runaway"])
@@ -1246,10 +1171,16 @@ async def matr_emancipate(ctx: commands.Context) -> None:
     bot = _bot(ctx)
     parent = bot.store.parent_of(ctx.author.id)
     if parent is None:
-        await _say(ctx, "You don't have a parent.", ok=False)
+        await _say(
+            ctx, "You don't have a parent.", ok=False, quip="emancipate"
+        )
         return
     bot.store.remove_child(ctx.author.id)
-    await _say(ctx, f"You're now free of <@{parent}>. Go forth.")
+    await _say(
+        ctx,
+        f"You're now free of <@{parent}>. Go forth.",
+        quip="emancipate",
+    )
 
 
 @matr.command(name="abandon")
@@ -1263,7 +1194,9 @@ async def matr_abandon(ctx: commands.Context) -> None:
     children = bot.store.children_of(uid)
     parent = bot.store.parent_of(uid)
     if not partners and not children and parent is None:
-        await _say(ctx, "You have no family to abandon.", ok=False)
+        await _say(
+            ctx, "You have no family to abandon.", ok=False, quip="abandon"
+        )
         return
     for p in partners:
         bot.store.remove_partners(uid, p)
@@ -1276,6 +1209,7 @@ async def matr_abandon(ctx: commands.Context) -> None:
         f"{ctx.author.mention} abandoned their whole family "
         f"({len(partners)} partner(s), {len(children)} child(ren), "
         f"{1 if parent is not None else 0} parent).",
+        quip="abandon",
     )
 
 
@@ -1295,7 +1229,7 @@ async def matr_tree(ctx: commands.Context, user: discord.User | None = None) -> 
         include_spouses=False,
         max_depth=bot.config.max_tree_depth,
     )
-    await ctx.reply(embed=_embed(text))
+    await ctx.reply(embed=_embed(text, quip="tree"))
 
 
 @matr.command(name="fulltree")
@@ -1311,7 +1245,7 @@ async def matr_fulltree(
         include_spouses=True,
         max_depth=bot.config.max_tree_depth,
     )
-    await ctx.reply(embed=_embed(text))
+    await ctx.reply(embed=_embed(text, quip="tree"))
 
 
 def _solo_line(
@@ -1335,6 +1269,7 @@ async def matr_parent(ctx: commands.Context, user: discord.User | None = None) -
         ctx,
         _solo_line(ctx, user, "parent", [parent] if parent is not None else []),
         ok=parent is not None,
+        quip="kin",
     )
 
 
@@ -1346,7 +1281,12 @@ async def matr_children(
     bot = _bot(ctx)
     uid = user.id if user else ctx.author.id
     children = bot.store.children_of(uid)
-    await _say(ctx, _solo_line(ctx, user, "children", children), ok=bool(children))
+    await _say(
+        ctx,
+        _solo_line(ctx, user, "children", children),
+        ok=bool(children),
+        quip="kin",
+    )
 
 
 @matr.command(name="siblings")
@@ -1357,7 +1297,12 @@ async def matr_siblings(
     bot = _bot(ctx)
     uid = user.id if user else ctx.author.id
     sibs = bot.family.siblings(uid)
-    await _say(ctx, _solo_line(ctx, user, "siblings", sibs), ok=bool(sibs))
+    await _say(
+        ctx,
+        _solo_line(ctx, user, "siblings", sibs),
+        ok=bool(sibs),
+        quip="kin",
+    )
 
 
 @matr.command(name="familysize")
@@ -1369,7 +1314,7 @@ async def matr_familysize(
     uid = user.id if user else ctx.author.id
     size = bot.store.family_size(uid)
     who = "You have" if user is None else f"{_display(user, ctx.author.id)} has"
-    await _say(ctx, f"{who} {size} family member(s).")
+    await _say(ctx, f"{who} {size} family member(s).", quip="kin")
 
 
 @matr.command(name="relationship")
@@ -1380,11 +1325,15 @@ async def matr_relationship(
     bot = _bot(ctx)
     rel = bot.family.relationship(a.id, b.id)
     if rel is None:
-        await _say(ctx, f"{a.mention} and {b.mention} aren't related.")
+        await _say(
+            ctx, f"{a.mention} and {b.mention} aren't related.", quip="kin"
+        )
     elif rel == "self":
-        await _say(ctx, "That's... the same person.")
+        await _say(ctx, "That's... the same person.", quip="kin")
     else:
-        await _say(ctx, f"{b.mention} is {a.mention}'s **{rel}**.")
+        await _say(
+            ctx, f"{b.mention} is {a.mention}'s **{rel}**.", quip="kin"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1399,10 +1348,16 @@ async def matr_block(ctx: commands.Context, user: discord.User) -> None:
     if await _jail_block(ctx, user.id):
         return
     if user.id == ctx.author.id:
-        await _say(ctx, "You can't block yourself.", ok=False)
+        await _say(
+            ctx, "You can't block yourself.", ok=False, quip="block"
+        )
         return
     bot.store.add_block(ctx.author.id, user.id)
-    await _say(ctx, f"Blocked {user.mention} from proposing to you.")
+    await _say(
+        ctx,
+        f"Blocked {user.mention} from proposing to you.",
+        quip=_quip_kind(ctx, user, "block"),
+    )
 
 
 @matr.command(name="unblock")
@@ -1410,9 +1365,9 @@ async def matr_unblock(ctx: commands.Context, user: discord.User) -> None:
     """Unblock a user."""
     bot = _bot(ctx)
     if not bot.store.remove_block(ctx.author.id, user.id):
-        await _say(ctx, "They weren't blocked.", ok=False)
+        await _say(ctx, "They weren't blocked.", ok=False, quip="block")
         return
-    await _say(ctx, f"Unblocked {user.mention}.")
+    await _say(ctx, f"Unblocked {user.mention}.", quip="block")
 
 
 @matr.command(name="blocked")
@@ -1421,9 +1376,11 @@ async def matr_blocked(ctx: commands.Context) -> None:
     bot = _bot(ctx)
     users = bot.store.blocked_users(ctx.author.id)
     if not users:
-        await _say(ctx, "You haven't blocked anyone.", ok=False)
+        await _say(ctx, "You haven't blocked anyone.", ok=False, quip="block")
         return
-    await _say(ctx, "Blocked: " + ", ".join(f"<@{u}>" for u in users))
+    await _say(
+        ctx, "Blocked: " + ", ".join(f"<@{u}>" for u in users), quip="block"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1447,6 +1404,7 @@ async def matr_restrain(ctx: commands.Context, user: discord.User) -> None:
             ctx,
             "You can't file a restraining order against yourself.",
             ok=False,
+            quip="law",
         )
         return
     if bot.user is not None and user.id == bot.user.id:
@@ -1455,6 +1413,7 @@ async def matr_restrain(ctx: commands.Context, user: discord.User) -> None:
             "Matrimony files the paperwork around here, not the other "
             "way round.",
             ok=False,
+            quip="bot:restrain",
         )
         return
     order = bot.store.file_restraining_order(
@@ -1470,6 +1429,7 @@ async def matr_restrain(ctx: commands.Context, user: discord.User) -> None:
         f"proposals or actions until <t:{order.expires_at}:R>. If they "
         "try, you'll be asked whether to press charges - charges mean "
         "jail.",
+        quip="law",
     )
 
 
@@ -1494,6 +1454,7 @@ async def matr_prefix(ctx: commands.Context, new_prefix: str | None = None) -> N
             ctx,
             f"This server's prefix is `{current}` "
             f"(e.g. `{current}{bot.config.command_name} marry @user`).",
+            quip="admin",
         )
         return
     if not ctx.author.guild_permissions.manage_guild:
@@ -1501,16 +1462,23 @@ async def matr_prefix(ctx: commands.Context, new_prefix: str | None = None) -> N
             ctx,
             "You need the Manage Server permission to change the prefix.",
             ok=False,
+            quip="admin",
         )
         return
     if len(new_prefix) > 10 or any(c.isspace() for c in new_prefix):
-        await _say(ctx, "Prefixes must be <=10 chars with no spaces.", ok=False)
+        await _say(
+            ctx,
+            "Prefixes must be <=10 chars with no spaces.",
+            ok=False,
+            quip="admin",
+        )
         return
     bot.store.set_prefix(ctx.guild.id, new_prefix)
     await _say(
         ctx,
         f"Prefix set to `{new_prefix}`. "
         f"Try `{new_prefix}{bot.config.command_name} help`.",
+        quip="admin",
     )
 
 
@@ -1529,6 +1497,7 @@ async def matr_incest(ctx: commands.Context) -> None:
         "Incest proposals are now **"
         + ("allowed" if not current else "disallowed")
         + "** in this server.",
+        quip="admin",
     )
 
 
@@ -1548,10 +1517,16 @@ async def matr_forcemarry(
     """Force-marry two users (no proposal needed)."""
     bot = _bot(ctx)
     if a.id == b.id:
-        await _say(ctx, "A user can't marry themselves.", ok=False)
+        await _say(
+            ctx, "A user can't marry themselves.", ok=False, quip="married"
+        )
         return
     bot.store.add_partners(a.id, b.id)
-    await _say(ctx, f"{a.mention} and {b.mention} are now married. :tada:")
+    await _say(
+        ctx,
+        f"{a.mention} and {b.mention} are now married. :tada:",
+        quip="married",
+    )
     await _notify_new_partners(
         bot, ctx, a.id, b.id, ctx.guild.id, ctx.channel.id
     )
@@ -1570,16 +1545,22 @@ async def matr_forcedivorce(
     if b is None:
         partners = bot.store.partners_of(a.id)
         if not partners:
-            await _say(ctx, "They have no partners.", ok=False)
+            await _say(
+                ctx, "They have no partners.", ok=False, quip="divorce"
+            )
             return
         for p in partners:
             bot.store.remove_partners(a.id, p)
-        await _say(ctx, f"Divorced {a.mention} from {len(partners)} partner(s).")
+        await _say(
+            ctx,
+            f"Divorced {a.mention} from {len(partners)} partner(s).",
+            quip="divorce",
+        )
         return
     if not bot.store.remove_partners(a.id, b.id):
-        await _say(ctx, "They aren't married.", ok=False)
+        await _say(ctx, "They aren't married.", ok=False, quip="divorce")
         return
-    await _say(ctx, f"Divorced {a.mention} and {b.mention}.")
+    await _say(ctx, f"Divorced {a.mention} and {b.mention}.", quip="divorce")
 
 
 @matr.command(name="forceadopt")
@@ -1596,22 +1577,34 @@ async def matr_forceadopt(
     (no self-adoption, no cycles, one parent per child)."""
     bot = _bot(ctx)
     if parent.id == child.id:
-        await _say(ctx, "A user can't adopt themselves.", ok=False)
+        await _say(
+            ctx, "A user can't adopt themselves.", ok=False, quip="adopt"
+        )
         return
     existing = bot.store.parent_of(child.id)
     if existing is not None:
-        await _say(ctx, "They already have a parent.", ok=False)
+        await _say(
+            ctx, "They already have a parent.", ok=False, quip="adopt"
+        )
         return
     if (
         child.id in bot.family.ancestors(parent.id)
         or parent.id in bot.family.ancestors(child.id)
     ):
-        await _say(ctx, "That would create a family loop.", ok=False)
+        await _say(
+            ctx, "That would create a family loop.", ok=False, quip="adopt"
+        )
         return
     if bot.store.add_child(parent.id, child.id):
-        await _say(ctx, f"{child.mention} is now {parent.mention}'s child.")
+        await _say(
+            ctx,
+            f"{child.mention} is now {parent.mention}'s child.",
+            quip="adopt",
+        )
     else:
-        await _say(ctx, "They already have a parent.", ok=False)
+        await _say(
+            ctx, "They already have a parent.", ok=False, quip="adopt"
+        )
 
 
 @matr.command(name="forceemancipate")
@@ -1623,10 +1616,12 @@ async def matr_forceemancipate(ctx: commands.Context, child: discord.User) -> No
     """Force-remove a user's parent."""
     bot = _bot(ctx)
     if bot.store.parent_of(child.id) is None:
-        await _say(ctx, "They have no parent.", ok=False)
+        await _say(
+            ctx, "They have no parent.", ok=False, quip="emancipate"
+        )
         return
     bot.store.remove_child(child.id)
-    await _say(ctx, f"Emancipated {child.mention}.")
+    await _say(ctx, f"Emancipated {child.mention}.", quip="emancipate")
 
 
 @matr.command(name="clear")
@@ -1644,6 +1639,7 @@ async def matr_clear(ctx: commands.Context) -> None:
         embed=_embed(
             f"**Reset this server's Matrimony state?**\n\n{_CLEAR_SCOPE}",
             RED,
+            quip="admin",
         ),
         view=view,
     )
@@ -1689,7 +1685,12 @@ def _make_fun(name: str) -> None:
             text = f"You {verb} yourself. Okay then. {emoji}"
         else:
             text = f"{ctx.author.mention} {verb} {user.mention}! {emoji}"
-        await _say(ctx, _quipped(ctx, user, text, name), image=gif)
+        await _say(
+            ctx,
+            text,
+            image=gif,
+            quip=_quip_kind(ctx, user, name, "fun"),
+        )
 
     _fun.__doc__ = f"{name.capitalize()} another user."
     # Set the docstring before decorating so the slash command gets a
@@ -1717,32 +1718,12 @@ async def matr_ship(
     )
     gif = await bot.gifs.fetch_url("handhold")
     text = f"{a.mention} x {b.mention}: **{pct}%** :heart:"
-    if _is_matrimony(ctx, a) or _is_matrimony(ctx, b):
-        text += f"\n-# {_quip('ship')}"
-    await _say(ctx, text, image=gif)
-
-
-_PICKUP_LINES = (
-    "Are you a prefix? Because everything I say starts with you.",
-    "Are you a rate limit? Because you leave me wanting more.",
-    "Is your name Wi-Fi? Because I'm feeling a connection.",
-    "Are you a pending proposal? I've been thinking about you for "
-    "300 seconds.",
-    "You must be a family tree, because I keep branching toward you.",
-    "Are you a migration? Because my schema changed when I saw you.",
-    "If you were a discord.py update, I'd pin you immediately.",
-    "Are you an embed? Because you look great in my timeline.",
-)
-
-_DATE_IDEAS = (
-    "to a candlelit debugging session, bugs provided free of charge",
-    "stargazing at the voice channel member list",
-    "to split one RAM upgrade, romantically",
-    "on a couples' refactor: you hold the TODOs, they hold your heart",
-    "to the edge of the render distance and back",
-    "for a slow scroll through each other's pinned messages",
-    "to dinner in the guild's AFK channel, it's quiet there",
-)
+    quip = (
+        "bot:ship"
+        if _is_matrimony(ctx, a) or _is_matrimony(ctx, b)
+        else "ship"
+    )
+    await _say(ctx, text, image=gif, quip=quip)
 
 
 @matr.command(name="flirt", aliases=["rizz"])
@@ -1753,10 +1734,12 @@ async def matr_flirt(ctx: commands.Context, user: discord.User) -> None:
         return
     if await _restrain_block(ctx, user, "flirt"):
         return
-    line = random.choice(_PICKUP_LINES)
+    line = random.choice(quips.PICKUP_LINES)
     gif = await bot.gifs.fetch_url("wink")
     text = f"{ctx.author.mention} to {user.mention}: *{line}*"
-    await _say(ctx, _quipped(ctx, user, text, "flirt"), image=gif)
+    await _say(
+        ctx, text, image=gif, quip=_quip_kind(ctx, user, "flirt")
+    )
 
 
 @matr.command(name="date", aliases=["dateidea"])
@@ -1767,10 +1750,12 @@ async def matr_date(ctx: commands.Context, user: discord.User) -> None:
         return
     if await _restrain_block(ctx, user, "date"):
         return
-    idea = random.choice(_DATE_IDEAS)
+    idea = random.choice(quips.DATE_IDEAS)
     gif = await bot.gifs.fetch_url("hug")
     text = f"{ctx.author.mention} takes {user.mention} {idea}."
-    await _say(ctx, _quipped(ctx, user, text, "date"), image=gif)
+    await _say(
+        ctx, text, image=gif, quip=_quip_kind(ctx, user, "date")
+    )
 
 
 def _fmt_duration(seconds: float) -> str:
@@ -1787,18 +1772,6 @@ def _fmt_duration(seconds: float) -> str:
     return f"{s}s"
 
 
-def _anniversary_note(seconds: float) -> str:
-    if seconds < 300:
-        return "The paperwork is still warm."
-    if seconds < 86400:
-        return "Still in the honeymoon phase."
-    if seconds < 30 * 86400:
-        return "Past the paper anniversary, into cardboard territory."
-    if seconds < 365 * 86400:
-        return "A love story for the ages, verified by SQLite."
-    return "SQLite remembers. So should you."
-
-
 @matr.command(name="anniversary", aliases=["anniv"])
 async def matr_anniversary(
     ctx: commands.Context, user: discord.User | None = None
@@ -1810,7 +1783,12 @@ async def matr_anniversary(
         if len(partners) == 1:
             target = partners[0]
         elif not partners:
-            await _say(ctx, "You're not married to anyone.", ok=False)
+            await _say(
+                ctx,
+                "You're not married to anyone.",
+                ok=False,
+                quip="anniversary",
+            )
             return
         else:
             await _say(
@@ -1818,21 +1796,28 @@ async def matr_anniversary(
                 "You have multiple partners - mention which one's "
                 "anniversary you want.",
                 ok=False,
+                quip="anniversary",
             )
             return
     else:
         target = user.id
     since = bot.store.partnership_since(ctx.author.id, target)
     if since is None:
-        await _say(ctx, "You're not married to them.", ok=False)
+        await _say(
+            ctx,
+            "You're not married to them.",
+            ok=False,
+            quip="anniversary",
+        )
         return
     elapsed = time.time() - since
     gif = await bot.gifs.fetch_url("kiss")
     await _say(
         ctx,
         f"{ctx.author.mention} and <@{target}> have been married for "
-        f"**{_fmt_duration(elapsed)}**. {_anniversary_note(elapsed)}",
+        f"**{_fmt_duration(elapsed)}**. {quips.anniversary_note(elapsed)}",
         image=gif,
+        quip="anniversary",
     )
 
 
@@ -1848,12 +1833,13 @@ async def matr_info(ctx: commands.Context) -> None:
     await ctx.reply(
         embed=discord.Embed(
             title="Matrimony",
-            description=(
+            description=quips.subtext(
                 "A MarriageBot-style family-tree bot: marriages, divorces, "
                 "adoptions and global family trees. Works for humans and "
                 "bots alike.\n\n"
                 f"Commands: `{ctx.prefix}{bot.config.command_name} help`\n"
-                "Source: https://github.com/CommunityPokeOrg/matrimony"
+                "Source: https://github.com/CommunityPokeOrg/matrimony",
+                "meta",
             ),
             colour=GOLD,
         ).set_footer(text=f"Matrimony v{__version__} - discord.py v{discord.__version__}")
@@ -1865,7 +1851,7 @@ async def matr_invite(ctx: commands.Context) -> None:
     """Get the bot's invite link."""
     bot = _bot(ctx)
     if bot.user is None:
-        await _say(ctx, "Not connected yet.", ok=False)
+        await _say(ctx, "Not connected yet.", ok=False, quip="meta")
         return
     url = discord.utils.oauth_url(
         bot.user.id,
@@ -1876,7 +1862,7 @@ async def matr_invite(ctx: commands.Context) -> None:
             add_reactions=True,
         ),
     )
-    await _say(ctx, f"[Invite Matrimony]({url})")
+    await _say(ctx, f"[Invite Matrimony]({url})", quip="meta")
 
 
 @matr.command(name="stats")
@@ -1888,14 +1874,15 @@ async def matr_stats(ctx: commands.Context) -> None:
         embed=discord.Embed(
             title="Matrimony stats",
             colour=GOLD,
-            description=(
+            description=quips.subtext(
                 f"Guilds: **{len(bot.guilds)}**\n"
                 f"Marriages: **{s['marriages']}**\n"
                 f"Parent-child links: **{s['parent_child_links']}**\n"
                 f"Open proposals: **{s['open_proposals']}**\n"
                 f"Partner notices: **{s['partner_notices']}**\n"
                 f"Restraining orders: **{s['restraining_orders']}**\n"
-                f"Inmates: **{s['inmates']}**"
+                f"Inmates: **{s['inmates']}**",
+                "meta",
             ),
         )
     )
@@ -2007,7 +1994,8 @@ async def _announce_expiry(
                 embed=_embed(
                     f"The restraining order protecting "
                     f"<@{order.protected}> against <@{order.restrained}> "
-                    f"has expired."
+                    f"has expired.",
+                    quip="expired",
                 )
             )
         except discord.HTTPException:
@@ -2020,24 +2008,24 @@ async def _announce_expiry(
         lines = [
             f"<@{rel.sentence.inmate}> has served their "
             f"{_fmt_duration(served)} sentence and is released.\n"
-            f"-# {_quip('release')}"
+            f"-# {quips.quip('release')}"
         ]
         for partner in rel.divorced:
             lines.append(
                 f"<@{rel.sentence.inmate}> and <@{partner}> were "
-                f"divorced on release. -# {_quip('dissolve')}"
+                f"divorced on release.\n-# {quips.quip('dissolve')}"
             )
         for child in rel.children_lost:
             lines.append(
                 f"<@{child}> was abandoned - their jail parent "
-                f"<@{rel.sentence.inmate}> was released. "
-                f"-# {_quip('dissolve')}"
+                f"<@{rel.sentence.inmate}> was released.\n"
+                f"-# {quips.quip('dissolve')}"
             )
         if rel.parent_lost is not None:
             lines.append(
                 f"<@{rel.sentence.inmate}>'s jail parent "
                 f"<@{rel.parent_lost}> is left inside - adoption "
-                f"dissolved. -# {_quip('dissolve')}"
+                f"dissolved.\n-# {quips.quip('dissolve')}"
             )
         try:
             await channel.send(embed=_embed("\n".join(lines)))
@@ -2085,7 +2073,7 @@ class MatrCog(commands.Cog):
             content = ctx.message.content.split()
             if len(content) >= 2 and content[0].endswith(self.bot.config.command_name):
                 await ctx.reply(
-                    content=_quip("unknown"),
+                    content=f"-# {quips.quip('unknown')}",
                     embed=_help_embed(ctx.prefix or "!", self.bot.config.command_name),
                 )
             return

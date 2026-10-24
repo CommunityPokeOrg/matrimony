@@ -14,19 +14,22 @@ from test_dispatch import (
     wire_message,
 )
 
-from matrimony.cogs import matr as matr_mod
-from matrimony.cogs.matr import (
-    _HELP_QUIPS,
-    _UNKNOWN_QUIPS,
-    MatrCog,
-    _help_embed,
-)
+from matrimony import quips
+from matrimony.cogs.matr import MatrCog, _help_embed
+
+_HELP_QUIPS = quips.HELP
+_UNKNOWN_QUIPS = quips.UNKNOWN
 
 
 def _sent_payload(send: AsyncMock) -> dict:
     """The payload of the last stubbed http.send_message call."""
     params = send.call_args.kwargs["params"]
     return params.payload if hasattr(params, "payload") else params
+
+
+def _content_quip(payload: dict) -> str:
+    """The `-# <quip>` subtext that makes up a reply's content."""
+    return payload["content"].removeprefix("-# ")
 
 
 def _wisdom_lines(description: str) -> list[str]:
@@ -101,6 +104,54 @@ def test_bare_matr_and_help_each_get_one_wisdom_line() -> None:
 
 
 # ---------------------------------------------------------------------------
+# `!matr help bot` - bot-specific submenu
+# ---------------------------------------------------------------------------
+
+
+def test_help_bot_shows_bot_submenu() -> None:
+    bot = make_bot()
+    send = stub_send(bot)
+    run(bot.process_commands(wire_message(bot, user(1), "!matr help bot")))
+    send.assert_awaited_once()
+    embed = _sent_payload(send)["embeds"][0]
+    assert "bot" in embed["title"].lower()
+    # Bot-specific guidance, not the generic command listing.
+    assert "any line" in embed["description"]
+    assert "bot accounts are first-class" in embed["description"]
+    assert "**Love**" not in embed["description"]
+    # Still ends with the usual wisdom subtext.
+    lines = _wisdom_lines(embed["description"])
+    assert len(lines) == 1
+    assert lines[0].removeprefix("-# ") in _HELP_QUIPS
+
+
+def test_help_bot_topic_is_case_insensitive() -> None:
+    bot = make_bot()
+    send = stub_send(bot)
+    run(bot.process_commands(wire_message(bot, user(1), "!matr help BOT")))
+    embed = _sent_payload(send)["embeds"][0]
+    assert "bot" in embed["title"].lower()
+
+
+def test_help_with_other_topic_falls_back_to_full_list() -> None:
+    """An unrecognized `help <topic>` shows the normal help embed."""
+    bot = make_bot()
+    send = stub_send(bot)
+    run(bot.process_commands(wire_message(bot, user(1), "!matr help trees")))
+    embed = _sent_payload(send)["embeds"][0]
+    assert "MarriageBot-style" in embed["description"]
+    assert "**Trees**" in embed["description"]
+
+
+def test_help_bot_mention_advertised() -> None:
+    """The bot submenu tells users the mention form exists."""
+    from matrimony.cogs.matr import _bot_help_embed
+
+    emb = _bot_help_embed("!", "matr")
+    assert "@Matrimony" in emb.description
+
+
+# ---------------------------------------------------------------------------
 # Unknown subcommands -> funny quip
 # ---------------------------------------------------------------------------
 
@@ -112,7 +163,8 @@ def test_unknown_subcommand_gets_a_quip() -> None:
     run(bot.process_commands(wire_message(bot, user(1), "!matr blorp")))
     send.assert_awaited_once()
     payload = _sent_payload(send)
-    assert payload["content"] in _UNKNOWN_QUIPS
+    assert payload["content"].startswith("-# ")
+    assert _content_quip(payload) in _UNKNOWN_QUIPS
     assert "MarriageBot-style" in payload["embeds"][0]["description"]
 
 
@@ -124,11 +176,13 @@ def test_unknown_subcommand_with_extra_words_still_quips() -> None:
             wire_message(bot, user(1), "!matr blorp and some more words")
         )
     )
-    assert _sent_payload(send)["content"] in _UNKNOWN_QUIPS
+    payload = _sent_payload(send)
+    assert payload["content"].startswith("-# ")
+    assert _content_quip(payload) in _UNKNOWN_QUIPS
 
 
 def test_unknown_quips_rotate() -> None:
-    seen = {matr_mod._quip("unknown") for _ in range(len(_UNKNOWN_QUIPS))}
+    seen = {quips.quip("unknown") for _ in range(len(_UNKNOWN_QUIPS))}
     assert seen == set(_UNKNOWN_QUIPS)
 
 
@@ -172,7 +226,9 @@ def test_unknown_subcommand_from_bot_author_still_quips() -> None:
             wire_message(bot, user(2, bot=True), "!matr blorp")
         )
     )
-    assert _sent_payload(send)["content"] in _UNKNOWN_QUIPS
+    payload = _sent_payload(send)
+    assert payload["content"].startswith("-# ")
+    assert _content_quip(payload) in _UNKNOWN_QUIPS
 
 
 def test_command_not_found_handler_also_quips() -> None:
@@ -192,4 +248,6 @@ def test_command_not_found_handler_also_quips() -> None:
         )
     )
     ctx.reply.assert_awaited_once()
-    assert ctx.reply.call_args.kwargs["content"] in _UNKNOWN_QUIPS
+    content = ctx.reply.call_args.kwargs["content"]
+    assert content.startswith("-# ")
+    assert content.removeprefix("-# ") in _UNKNOWN_QUIPS

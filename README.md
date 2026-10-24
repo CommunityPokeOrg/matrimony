@@ -56,13 +56,18 @@ All commands live under one group, `matr`, invoked with a per-guild prefix
   pinned forever, and busy channels nudge it: the score includes the
   rolling count of channel messages over the last 10 minutes (a small,
   bounded in-memory window fed by every observed message, bots included).
-- **Bot-directed quips** — aiming an action at Matrimony itself appends a
-  rotating one-liner as Discord subtext (a `-# ` line) under the normal
-  reply, and proposals at the bot are declined outright ("sorry, taken by
-  discord.py").
+- **Ambient quips everywhere** — basically every command reply ends with
+  one rotating one-liner of commentary, rendered as Discord subtext (a
+  `-# ` line) at the bottom of the embed or message. All quips live in a
+  single file (`matrimony/quips.py`) organized by command and theme:
+  marriage, divorce, trees, blocks, law, admin, fun actions, meta, and
+  more.
+- **Bot-directed quips** — aiming an action at Matrimony itself swaps the
+  ambient line for one from the bot's own pool, and proposals at the bot
+  are declined outright ("sorry, taken by discord.py").
 - **Unknown-action quips** — `!matr blorp` (or any nonexistent action)
-  gets a rotating funny quip plus the help embed, never silence. The
-  bot's own messages never trigger it.
+  gets a rotating funny quip as subtext plus the help embed, never
+  silence. The bot's own messages never trigger it.
 - **Marital wisdom** — `!matr help` (and bare `!matr`) ends with one
   randomly chosen quip about memes, Discord culture, programming, and
   relationships, rendered as Discord subtext below the full command
@@ -87,8 +92,9 @@ explicitly supports bot-authored commands and bot targets:
   self-command loops while leaving every other bot free to participate.
 - Command parsing is lenient: leading/trailing whitespace and extra text
   after the arguments are tolerated, `@Matrimony matr ...` works as a
-  mention prefix, and whitespace after the prefix (`! matr help`) is
-  accepted.
+  mention prefix, whitespace after the prefix (`! matr help`) is
+  accepted, and the command may sit on **any line** of the message —
+  chatter first, then `!matr <action>` on its own line, still runs.
 - Covered by tests: proposal/accept flows driven by bot-authored commands
   (`tests/test_dispatch.py`).
 
@@ -96,7 +102,7 @@ explicitly supports bot-authored commands and bot targets:
 
 | Command | Description |
 | --- | --- |
-| `!matr help` | Show the command list |
+| `!matr help [bot]` | Show the command list; `help bot` shows bot-specific guidance |
 | `!matr marry @user` | Propose to a user or bot (existing partners get an accept/divorce notice) |
 | `!matr divorce [@user]` | Divorce a partner (required if you have several) |
 | `!matr accept [@proposer]` / `decline` | Answer a pending proposal — `accept` also acknowledges partner notices |
@@ -126,7 +132,9 @@ explicitly supports bot-authored commands and bot targets:
 | `!matr anniversary [@partner]` (alias `anniv`) | Time married (+ GIF) |
 | `!matr info` / `invite` / `stats` | Bot information |
 
-`@Matrimony matr ...` (mention prefix) also always works.
+`@Matrimony matr ...` (mention prefix) also always works, and the
+command doesn't have to open the message — any line that starts with
+the prefix is parsed as the command (everything else is chatter).
 
 On the slash side, `restrain` is `/matr restrain` and `clear` lives under
 the admin subgroup as `/matr admin clear`; `anniversary` is under
