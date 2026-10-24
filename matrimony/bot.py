@@ -8,6 +8,7 @@ import time
 import discord
 from discord.ext import commands
 
+from .avatars import AvatarCache
 from .config import Config
 from .family import FamilyView
 from .gifs import FluxpointClient
@@ -43,6 +44,8 @@ class MatrimonyBot(commands.Bot):
         self.gifs = FluxpointClient(config.fluxpoint_api_key)
         # Named channel_activity: ``Client.activity`` is the presence field.
         self.channel_activity = ChannelActivity()
+        # Shared across tree renders so avatars are not re-downloaded.
+        self.avatar_cache = AvatarCache()
 
     # ------------------------------------------------------------- prefixes
 

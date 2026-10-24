@@ -7,8 +7,6 @@ configured command name) and owns the error handler.
 
 from __future__ import annotations
 
-import asyncio
-import base64
 import contextlib
 import io
 import random
@@ -21,6 +19,7 @@ from discord.ext import commands, tasks
 
 from .. import __version__, quips
 from .. import jail as jail_mod
+from ..avatars import avatar_map
 from ..bot import MatrimonyBot
 from ..ship import ship_score
 from ..store import Notice, Proposal, RestrainingOrder
@@ -1226,15 +1225,6 @@ async def matr_abandon(ctx: commands.Context) -> None:
 # so the tree is truncated and labelled instead.
 SVG_MAX_NODES = 200
 
-# Avatar budget: a 64px PNG per person, fetched with bounded concurrency and
-# only for the first few dozen nodes, so a huge tree cannot turn into a
-# hundred HTTP requests before the image is even built.
-AVATAR_PX = 64
-AVATAR_FETCH_LIMIT = 60
-AVATAR_CONCURRENCY = 8
-AVATAR_MAX_BYTES = 32 * 1024
-
-
 # Discord does not inline SVG attachments, so the rendered document is
 # rasterized to PNG before upload. Rendered at 2x so names stay legible.
 PNG_SCALE = 2
@@ -1269,39 +1259,6 @@ def _tree_image_file(
     return discord.File(io.BytesIO(png), filename=f"tree-{uid}.png")
 
 
-async def _avatar_map(
-    guild: discord.Guild | None, ids: list[int]
-) -> dict[int, str]:
-    """Embed each member's server avatar as a ``data:`` URI.
-
-    Avatars are downloaded at 64px and inlined, because the SVG has to stay
-    self-contained. Anything that fails to fetch is simply left out and the
-    node falls back to an initial disc.
-    """
-    if guild is None or not ids:
-        return {}
-    out: dict[int, str] = {}
-    limit = asyncio.Semaphore(AVATAR_CONCURRENCY)
-
-    async def one(uid: int) -> None:
-        member = guild.get_member(uid)
-        if member is None:
-            return
-        async with limit:
-            try:
-                data = await member.display_avatar.replace(
-                    size=AVATAR_PX, static_format="png"
-                ).read()
-            except (discord.HTTPException, OSError):
-                return
-        if not data or len(data) > AVATAR_MAX_BYTES:
-            return
-        out[uid] = "data:image/png;base64," + base64.b64encode(data).decode()
-
-    await asyncio.gather(*(one(uid) for uid in ids[:AVATAR_FETCH_LIMIT]))
-    return out
-
-
 async def _post_tree(
     ctx: commands.Context,
     uid: int,
@@ -1325,7 +1282,7 @@ async def _post_tree(
                 max_depth=bot.config.max_tree_depth,
                 max_nodes=SVG_MAX_NODES,
             )
-            avatars = await _avatar_map(ctx.guild, members)
+            avatars = await avatar_map(bot, ctx.guild, members, bot.avatar_cache)
             await ctx.reply(
                 file=_tree_image_file(
                     bot,
