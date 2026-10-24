@@ -1261,7 +1261,6 @@ def _tree_image_file(
         uid,
         _name_of(bot, guild),
         include_spouses=include_spouses,
-        max_depth=bot.config.max_tree_depth,
         max_nodes=SVG_MAX_NODES,
         avatar_of=avatars.get,
     )
@@ -1322,7 +1321,6 @@ async def _post_tree(
                 bot.store,
                 uid,
                 include_spouses=include_spouses,
-                max_depth=bot.config.max_tree_depth,
                 max_nodes=SVG_MAX_NODES,
             )
             avatars = await _avatar_map(ctx.guild, members)
