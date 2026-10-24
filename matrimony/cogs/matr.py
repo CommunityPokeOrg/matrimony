@@ -1290,11 +1290,6 @@ async def matr_abandon(ctx: commands.Context) -> None:
 SVG_MAX_NODES = 200
 
 
-def _wants_svg(format: str | None) -> bool:
-    """Whether the caller asked for an image rather than the text tree."""
-    return (format or "").strip().lower() == "svg"
-
-
 def _svg_tree_file(
     bot: MatrimonyBot,
     uid: int,
@@ -1318,50 +1313,26 @@ def _svg_tree_file(
 
 @matr.command(name="tree")
 async def matr_tree(
-    ctx: commands.Context,
-    user: discord.User | None = None,
-    format: str | None = None,
+    ctx: commands.Context, user: discord.User | None = None
 ) -> None:
-    """Show a user's blood family tree. Pass ``svg`` for an image."""
+    """Show a user's blood family tree as an image."""
     bot = _bot(ctx)
     uid = user.id if user else ctx.author.id
-    if _wants_svg(format):
-        await ctx.reply(
-            file=_svg_tree_file(bot, uid, ctx.guild, include_spouses=False)
-        )
-        return
-    text = bot.family.render_tree(
-        uid,
-        _name_of(bot, ctx.guild),
-        include_spouses=False,
-        max_depth=bot.config.max_tree_depth,
+    await ctx.reply(
+        file=_svg_tree_file(bot, uid, ctx.guild, include_spouses=False)
     )
-    await ctx.reply(embed=_embed(text))
 
 
 @matr.command(name="fulltree")
 async def matr_fulltree(
-    ctx: commands.Context,
-    user: discord.User | None = None,
-    format: str | None = None,
+    ctx: commands.Context, user: discord.User | None = None
 ) -> None:
-    """Show a user's full family tree including partners.
-
-    Pass ``svg`` for an image."""
+    """Show a user's full family tree, partners included, as an image."""
     bot = _bot(ctx)
     uid = user.id if user else ctx.author.id
-    if _wants_svg(format):
-        await ctx.reply(
-            file=_svg_tree_file(bot, uid, ctx.guild, include_spouses=True)
-        )
-        return
-    text = bot.family.render_tree(
-        uid,
-        _name_of(bot, ctx.guild),
-        include_spouses=True,
-        max_depth=bot.config.max_tree_depth,
+    await ctx.reply(
+        file=_svg_tree_file(bot, uid, ctx.guild, include_spouses=True)
     )
-    await ctx.reply(embed=_embed(text))
 
 
 def _solo_line(
