@@ -202,6 +202,15 @@ def render_tree_svg(
         for uid in ancestors
     ]
 
+    # Ancestors' partners need boxes too, not just connector lines - a
+    # spouse sitting beside someone in the ancestor chain is drawn exactly
+    # like one beside a descendant.
+    for uid, x, y in ancestor_boxes:
+        for index, spouse in enumerate(partners.get(uid, ())):
+            spouses.append(
+                (spouse, x + NODE_W + GAP_X + index * (NODE_W + GAP_X), y)
+            )
+
     # Every placed node, for edge drawing. Ancestors and spouses are placed
     # outside the root's descent, so ``boxes`` alone is not enough.
     pos: dict[int, tuple[float, float]] = dict(boxes)
