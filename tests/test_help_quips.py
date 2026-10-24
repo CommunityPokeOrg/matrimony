@@ -52,11 +52,9 @@ def test_help_embed_under_discord_description_limit() -> None:
 def test_help_embed_has_exactly_one_wisdom_line_at_the_bottom() -> None:
     emb = _help_embed("!", "matr")
     assert "**Marital wisdom**" in emb.description
-    # The section is at the bottom of the description.
-    assert emb.description.rindex("**Marital wisdom**") > (
-        emb.description.rindex("**Meta**")
-    )
+    # The commands live in fields now, so the quip closes the description.
     lines = _wisdom_lines(emb.description)
+    assert emb.description.rstrip().endswith(lines[-1])
     assert len(lines) == 1
     # The line is one quip from the pool, and only that quip made it in.
     assert lines[0].removeprefix("-# ") in _HELP_QUIPS
@@ -86,9 +84,14 @@ def test_help_embed_quips_pool_stays_large() -> None:
 
 
 def test_help_embed_keeps_command_listing() -> None:
+    """Each area gets its own field instead of one wall of text."""
     emb = _help_embed("!", "matr")
-    for section in ("**Love**", "**Parentage**", "**Trees**", "**Fun**", "**Meta**"):
-        assert section in emb.description
+    names = [field.name for field in emb.fields]
+    for section in ("Love", "Parentage", "Trees", "Fun", "Meta"):
+        assert section in names, f"missing help section: {section}"
+    for field in emb.fields:
+        assert len(field.value) <= 1024, f"field too long: {field.name}"
+    assert len(emb.fields) <= 25
 
 
 def test_bare_matr_and_help_each_get_one_wisdom_line() -> None:
@@ -140,7 +143,7 @@ def test_help_with_other_topic_falls_back_to_full_list() -> None:
     run(bot.process_commands(wire_message(bot, user(1), "!matr help trees")))
     embed = _sent_payload(send)["embeds"][0]
     assert "MarriageBot-style" in embed["description"]
-    assert "**Trees**" in embed["description"]
+    assert any(field["name"] == "Trees" for field in embed["fields"])
 
 
 def test_help_bot_mention_advertised() -> None:

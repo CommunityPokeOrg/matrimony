@@ -801,41 +801,81 @@ async def _pick_answerable(
     return items[0]
 
 
+# Command groups for the help embed, one field per area. Keeping them out of
+# the description is the point: a single blob of every command reads as a wall
+# on mobile, while fields get their own headers and spacing.
+_HELP_SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (
+        "Love",
+        (
+            "`marry @user` propose",
+            "`divorce [@user]` end a marriage",
+            "`accept` / `decline [@user]` answer a proposal",
+            "`partners [@user]` who you are married to",
+            "-# a new marriage notifies your existing partners",
+        ),
+    ),
+    (
+        "Parentage",
+        (
+            "`adopt @user` / `makeparent @user`",
+            "`disown @child` / `disownall`",
+            "`emancipate` / `abandon`",
+        ),
+    ),
+    (
+        "Trees",
+        (
+            "`tree [@user]` blood relatives only",
+            "`fulltree [@user]` partners included",
+            "`parent` / `children` / `siblings`",
+            "`familysize [@user]`",
+            "`relationship @a @b`",
+        ),
+    ),
+    (
+        "Blocks & law",
+        (
+            "`block @user` / `unblock @user` / `blocked`",
+            "`restrain @user` one-hour order, violations offer jail time",
+        ),
+    ),
+    (
+        "Fun",
+        (
+            "`hug` `cuddle` `kiss` `pat` `poke` `wave` `lick` `nom`",
+            "`tickle` `highfive` `handhold` `slap` `punch` `bite` `stab`",
+            "`ship @a @b` / `flirt @user` / `date @user`",
+            "`anniversary [@partner]`",
+        ),
+    ),
+    (
+        "Server (Manage Server)",
+        (
+            "`prefix <new>` / `incest` / `clear`",
+            "`forcemarry @a @b` / `forcedivorce @a [@b]`",
+            "`forceadopt @parent @child` / `forceemancipate @user`",
+        ),
+    ),
+    (
+        "Meta",
+        (
+            "`info` / `invite` / `stats`",
+            "`help [bot]` for how to talk to the bot",
+        ),
+    ),
+)
+
+
 def _help_embed(
     prefix: str, cmd: str, rng: random.Random | None = None
 ) -> discord.Embed:
     wisdom = quips.quip("help", rng or random)
-    return discord.Embed(
+    emb = discord.Embed(
         title="Matrimony",
         description=(
-            f"MarriageBot-style family trees. Commands: `{prefix}{cmd} "
-            "<action>`.\n\n"
-            "**Love**\n"
-            "`marry @user` propose - `divorce [@user]` - "
-            "`accept`/`decline [@user]` - `partners [@user]`\n"
-            "*(marrying notifies existing partners, who can accept or "
-            "divorce)*\n"
-            "**Parentage**\n"
-            "`adopt @user` - `makeparent @user` - `disown @child` - "
-            "`disownall` - `emancipate` - `abandon`\n"
-            "**Trees**\n"
-            "`tree [@user]` - `fulltree [@user]` - `parent [@user]` - "
-            "`children [@user]` - `siblings [@user]` - `familysize [@user]` - "
-            "`relationship @a @b`\n"
-            "**Blocks & law**\n"
-            "`block @user` - `unblock @user` - `blocked` - "
-            "`restrain @user` (1h order - violations offer jail time)\n"
-            "**Server** *(Manage Server)*\n"
-            "`prefix <new>` - `incest` - `forcemarry @a @b` - "
-            "`forcedivorce @a [@b]` - `forceadopt @parent @child` - "
-            "`forceemancipate @user` - `clear`\n"
-            "**Fun**\n"
-            "`hug`/`cuddle`/`kiss`/`pat`/`poke`/`wave`/`lick`/`nom`\n"
-            "`tickle`/`highfive`/`handhold`/`slap`/`punch`/`bite`/`stab "
-            "@user` - `ship @a @b` - `flirt @user` - `date @user` - "
-            "`anniversary [@partner]`\n"
-            "**Meta**\n"
-            "`info` - `invite` - `stats` - `help [bot]`\n\n"
+            f"MarriageBot-style family trees. Every command starts with "
+            f"`{prefix}{cmd} <action>`.\n\n"
             "Family trees are global across servers, and bot accounts can "
             "use commands and be married or adopted. Users may have multiple "
             "partners; existing partners are notified of each new marriage "
@@ -844,6 +884,9 @@ def _help_embed(
         ),
         colour=GOLD,
     )
+    for name, lines in _HELP_SECTIONS:
+        emb.add_field(name=name, value="\n".join(lines), inline=False)
+    return emb
 
 
 def _bot_help_embed(
