@@ -5,7 +5,7 @@ from xml.etree import ElementTree
 import pytest
 
 from matrimony.store import Store
-from matrimony.svgtree import render_tree_svg
+from matrimony.svgtree import render_tree_svg, tree_members
 
 
 @pytest.fixture()
@@ -135,3 +135,64 @@ def test_svg_no_external_references(store: Store) -> None:
     )
     assert "<script" not in svg
     assert "<image" not in svg
+
+
+# A 1x1 PNG, enough to prove the embedding path works.
+TINY_PNG = (
+    "data:image/png;base64,"
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8"
+    "BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+)
+
+
+def test_svg_embeds_avatars(store: Store) -> None:
+    build_tree(store)
+    svg = render_tree_svg(
+        store, 1, _name, include_spouses=True, avatar_of=lambda uid: TINY_PNG
+    )
+    # root, its partner, two children, a grandchild, that grandchild's partner
+    assert svg.count("<image") == 6
+    assert TINY_PNG in svg
+    assert "clip-path" in svg
+    ElementTree.fromstring(svg)
+
+
+def test_svg_avatar_fallback_disc(store: Store) -> None:
+    """No avatar means an initial disc, not a blank gap."""
+    store.add_child(1, 2)
+    svg = render_tree_svg(
+        store, 1, lambda uid: "zoe" if uid == 2 else "adam", avatar_of=lambda uid: None
+    )
+    assert "<image" not in svg
+    assert "<circle" in svg
+    names = text_nodes(svg)
+    assert "Z" in names  # initial of the avatar-less child
+    assert "A" in names  # initial of the avatar-less root
+
+
+def test_svg_rejects_remote_avatar_urls(store: Store) -> None:
+    """A remote URL would make the file depend on someone else's server."""
+    store.add_child(1, 2)
+    svg = render_tree_svg(
+        store,
+        1,
+        _name,
+        avatar_of=lambda uid: "https://cdn.discordapp.com/avatars/1/x.png",
+    )
+    assert "<image" not in svg
+    assert "cdn.discordapp.com" not in svg
+
+
+def test_svg_ignores_blank_avatar(store: Store) -> None:
+    store.add_child(1, 2)
+    svg = render_tree_svg(store, 1, _name, avatar_of=lambda uid: "  ")
+    assert "<image" not in svg
+
+
+def test_tree_members_lists_everyone_drawn(store: Store) -> None:
+    build_tree(store)
+    members = set(tree_members(store, 1, include_spouses=True))
+    assert {1, 2, 3, 4, 5, 6} <= members
+    # Blood-only view leaves the grandchild's partner out.
+    blood = set(tree_members(store, 1, include_spouses=False))
+    assert 6 not in blood

@@ -3,12 +3,14 @@
 Pure module: a ``Store`` plus a name resolver in, an SVG document out. The
 graph it walks mirrors :meth:`matrimony.family.FamilyView.render_tree` -
 the ancestor chain above the root, blood descendants below, partners beside
-their spouse when asked - so ``!matr tree`` and ``!matr svgtree`` describe
+their spouse when asked - so ``!matr tree`` and the text renderer describe
 the same family.
 
 The output is a standalone document: no external references, no fonts to
-fetch, no scripts. It can be attached to Discord as-is or opened in a
-browser.
+fetch, no scripts. Avatars, when supplied, must already be ``data:`` URIs -
+a remote URL would make the file depend on someone else's server, so it is
+dropped rather than embedded. Nodes without an avatar fall back to a
+coloured disc holding the first letter of the display name.
 """
 
 from __future__ import annotations
@@ -19,13 +21,16 @@ from xml.sax.saxutils import escape, quoteattr
 from .store import Store
 
 NameFn = Callable[[int], str]
+AvatarFn = Callable[[int], str | None]
 
 # Geometry, in pixels.
-NODE_W = 168
+NODE_W = 196
 NODE_H = 44
 GAP_X = 22
 GAP_Y = 58
 PAD = 32
+AVATAR_R = 14
+AVATAR_INSET = 14
 
 # Palette: Discord's dark surface, with the embed green for the root.
 BG = "#1e1f22"
@@ -36,8 +41,9 @@ TEXT = "#f2f3f5"
 MUTED = "#b5bac1"
 ACCENT = "#2ecc71"
 PARTNER = "#f1c40f"
+FALLBACK_FILL = "#3a3d44"
 
-MAX_LABEL = 24
+MAX_LABEL = 20
 FONT = "ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif"
 
 Node = dict[str, object]
@@ -49,6 +55,20 @@ def _label(name: str) -> str:
     if len(text) > MAX_LABEL:
         text = text[: MAX_LABEL - 1] + "\u2026"
     return escape(text)
+
+
+def _initial(name: str) -> str:
+    """First character of a display name, for the avatar-less fallback."""
+    text = (name or "").strip()
+    return escape(text[:1].upper()) if text else "?"
+
+
+def _avatar_href(value: str | None) -> str | None:
+    """Accept an embedded image payload; reject anything fetched remotely."""
+    if not value:
+        return None
+    href = value.strip()
+    return href if href.startswith("data:image/") else None
 
 
 def _collect(
@@ -125,6 +145,38 @@ def _collect(
     return nodes, partners, ancestors, truncated
 
 
+def tree_members(
+    store: Store,
+    root: int,
+    *,
+    include_spouses: bool = False,
+    max_depth: int = 10,
+    max_nodes: int = 200,
+) -> list[int]:
+    """Ids that :func:`render_tree_svg` would draw, in no particular order.
+
+    Callers use this to decide whose avatars are worth fetching before the
+    synchronous render runs.
+    """
+    nodes, partners, ancestors, _truncated = _collect(
+        store,
+        root,
+        include_spouses=include_spouses,
+        max_depth=max_depth,
+        max_nodes=max_nodes,
+    )
+    ids = list(nodes) + ancestors
+    for spouses in partners.values():
+        ids.extend(spouses)
+    seen: set[int] = set()
+    ordered: list[int] = []
+    for uid in ids:
+        if uid not in seen:
+            seen.add(uid)
+            ordered.append(uid)
+    return ordered
+
+
 def _widths(
     uid: int, nodes: dict[int, Node], partners: dict[int, list[int]]
 ) -> dict[int, int]:
@@ -155,8 +207,13 @@ def render_tree_svg(
     include_spouses: bool = False,
     max_depth: int = 10,
     max_nodes: int = 200,
+    avatar_of: AvatarFn | None = None,
 ) -> str:
-    """Render ``root``'s family as a standalone SVG document."""
+    """Render ``root``'s family as a standalone SVG document.
+
+    ``avatar_of`` may return a ``data:image/...`` URI per user id; anything
+    else is ignored and the node falls back to an initial disc.
+    """
     nodes, partners, ancestors, truncated = _collect(
         store,
         root,
@@ -233,6 +290,13 @@ def render_tree_svg(
     def shift(px: float) -> float:
         return px - min_x + PAD
 
+    avatars: dict[int, str] = {}
+    if avatar_of is not None:
+        for uid in pos:
+            href = _avatar_href(avatar_of(uid))
+            if href:
+                avatars[uid] = href
+
     out: list[str] = [
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{canvas_w}" '
         f'height="{canvas_h}" viewBox="0 0 {canvas_w} {canvas_h}" '
@@ -282,15 +346,44 @@ def render_tree_svg(
     def box(uid: int, x: float, y: float, *, root_node: bool, partner: bool) -> None:
         fill = BOX_ROOT if root_node else BOX
         stroke = ACCENT if root_node else STROKE
+        bx = shift(x)
         out.append(
-            f'<rect x="{shift(x):.1f}" y="{y:.1f}" width="{NODE_W}" '
+            f'<rect x="{bx:.1f}" y="{y:.1f}" width="{NODE_W}" '
             f'height="{NODE_H}" rx="10" fill="{fill}" stroke="{stroke}" '
             f'stroke-width="{2 if root_node else 1}"/>'
         )
+
+        # Avatar disc, then the name to its right.
+        cx = bx + AVATAR_INSET + AVATAR_R
+        cy = y + NODE_H / 2
+        href = avatars.get(uid)
+        if href is not None:
+            out.append(
+                f'<clipPath id="av{uid}"><circle cx="{cx:.1f}" cy="{cy:.1f}" '
+                f'r="{AVATAR_R}"/></clipPath>'
+            )
+            out.append(
+                f'<image x="{cx - AVATAR_R:.1f}" y="{cy - AVATAR_R:.1f}" '
+                f'width="{AVATAR_R * 2}" height="{AVATAR_R * 2}" '
+                f'preserveAspectRatio="xMidYMid slice" '
+                f'clip-path="url(#av{uid})" href={quoteattr(href)}/>'
+            )
+        else:
+            out.append(
+                f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="{AVATAR_R}" '
+                f'fill="{FALLBACK_FILL}" stroke="{STROKE}" stroke-width="1"/>'
+            )
+            out.append(
+                f'<text x="{cx:.1f}" y="{cy:.1f}" fill="{MUTED}" '
+                f'font-size="12" text-anchor="middle" '
+                f'dominant-baseline="central">{_initial(name_of(uid))}</text>'
+            )
+
+        text_x = cx + AVATAR_R + 10
         out.append(
-            f'<text x="{shift(x) + NODE_W / 2:.1f}" y="{y + NODE_H / 2:.1f}" '
+            f'<text x="{text_x:.1f}" y="{cy:.1f}" '
             f'fill="{PARTNER if partner else TEXT}" font-size="14" '
-            f'text-anchor="middle" dominant-baseline="middle">'
+            f'text-anchor="start" dominant-baseline="middle">'
             f"{_label(name_of(uid))}</text>"
         )
 
