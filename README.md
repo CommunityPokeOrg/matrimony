@@ -23,8 +23,9 @@ All commands live under one group, `matr`, invoked with a per-guild prefix
   become your parent), `disown`, `disownall`, `emancipate`/`runaway`,
   `abandon` (wipe your whole family).
 - **Family trees** — `tree` (blood relatives) and `fulltree` (partners
-  included), posted as a PNG image with member avatars (rendered from a
-  self-contained SVG via cairosvg, so Discord inlines it), plus
+  included), posted as a PNG image with user avatars (rendered from a
+  self-contained SVG via cairosvg, so Discord inlines it; avatars are
+  fetched for off-server users too and cached between renders), plus
   `parent`, `children`, `siblings`, `familysize`, `relationship`. Pass
   `text` to get the plain inline listing instead, or to fall back when
   image rendering fails.
