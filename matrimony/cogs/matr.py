@@ -7,9 +7,13 @@ configured command name) and owns the error handler.
 
 from __future__ import annotations
 
+import asyncio
+import base64
 import contextlib
+import io
 import random
 import time
+from typing import Literal
 
 import discord
 from discord import app_commands
@@ -20,6 +24,7 @@ from .. import jail as jail_mod
 from ..bot import MatrimonyBot
 from ..ship import ship_score
 from ..store import Notice, Proposal, RestrainingOrder
+from ..svgtree import render_tree_svg, tree_members
 
 GREEN = discord.Color(0x2ECC71)
 RED = discord.Color(0xE74C3C)
@@ -1217,35 +1222,146 @@ async def matr_abandon(ctx: commands.Context) -> None:
 # Trees and info
 # ---------------------------------------------------------------------------
 
+# Node budget for the SVG renderer: past this the image turns into confetti,
+# so the tree is truncated and labelled instead.
+SVG_MAX_NODES = 200
 
-@matr.command(name="tree")
-async def matr_tree(ctx: commands.Context, user: discord.User | None = None) -> None:
-    """Show a user's blood family tree."""
+# Avatar budget: a 64px PNG per person, fetched with bounded concurrency and
+# only for the first few dozen nodes, so a huge tree cannot turn into a
+# hundred HTTP requests before the image is even built.
+AVATAR_PX = 64
+AVATAR_FETCH_LIMIT = 60
+AVATAR_CONCURRENCY = 8
+AVATAR_MAX_BYTES = 32 * 1024
+
+
+def _svg_tree_file(
+    bot: MatrimonyBot,
+    uid: int,
+    guild: discord.Guild | None,
+    *,
+    include_spouses: bool,
+    avatars: dict[int, str],
+) -> discord.File:
+    """Render ``uid``'s tree as a standalone SVG attachment."""
+    svg = render_tree_svg(
+        bot.store,
+        uid,
+        _name_of(bot, guild),
+        include_spouses=include_spouses,
+        max_depth=bot.config.max_tree_depth,
+        max_nodes=SVG_MAX_NODES,
+        avatar_of=avatars.get,
+    )
+    return discord.File(
+        io.BytesIO(svg.encode("utf-8")), filename=f"tree-{uid}.svg"
+    )
+
+
+async def _avatar_map(
+    guild: discord.Guild | None, ids: list[int]
+) -> dict[int, str]:
+    """Embed each member's server avatar as a ``data:`` URI.
+
+    Avatars are downloaded at 64px and inlined, because the SVG has to stay
+    self-contained. Anything that fails to fetch is simply left out and the
+    node falls back to an initial disc.
+    """
+    if guild is None or not ids:
+        return {}
+    out: dict[int, str] = {}
+    limit = asyncio.Semaphore(AVATAR_CONCURRENCY)
+
+    async def one(uid: int) -> None:
+        member = guild.get_member(uid)
+        if member is None:
+            return
+        async with limit:
+            try:
+                data = await member.display_avatar.replace(
+                    size=AVATAR_PX, static_format="png"
+                ).read()
+            except (discord.HTTPException, OSError):
+                return
+        if not data or len(data) > AVATAR_MAX_BYTES:
+            return
+        out[uid] = "data:image/png;base64," + base64.b64encode(data).decode()
+
+    await asyncio.gather(*(one(uid) for uid in ids[:AVATAR_FETCH_LIMIT]))
+    return out
+
+
+async def _post_tree(
+    ctx: commands.Context,
+    uid: int,
+    *,
+    include_spouses: bool,
+    display: str = "svg",
+) -> None:
+    """Send a tree, as an image unless asked otherwise.
+
+    ``display="text"`` posts the inline listing. Any failure while building
+    the image falls back to that same listing, so the command always answers
+    with something.
+    """
     bot = _bot(ctx)
-    uid = user.id if user else ctx.author.id
+    if display != "text":
+        with contextlib.suppress(Exception):
+            members = tree_members(
+                bot.store,
+                uid,
+                include_spouses=include_spouses,
+                max_depth=bot.config.max_tree_depth,
+                max_nodes=SVG_MAX_NODES,
+            )
+            avatars = await _avatar_map(ctx.guild, members)
+            await ctx.reply(
+                file=_svg_tree_file(
+                    bot,
+                    uid,
+                    ctx.guild,
+                    include_spouses=include_spouses,
+                    avatars=avatars,
+                )
+            )
+            return
     text = bot.family.render_tree(
         uid,
         _name_of(bot, ctx.guild),
-        include_spouses=False,
+        include_spouses=include_spouses,
         max_depth=bot.config.max_tree_depth,
     )
-    await ctx.reply(embed=_embed(text, quip="tree"))
+    await ctx.reply(embed=_embed(text))
+
+
+@matr.command(name="tree")
+async def matr_tree(
+    ctx: commands.Context,
+    user: discord.User | None = None,
+    display: Literal["svg", "text"] = "svg",
+) -> None:
+    """Show a user's blood family tree as an image, or as text."""
+    await _post_tree(
+        ctx,
+        user.id if user else ctx.author.id,
+        include_spouses=False,
+        display=display,
+    )
 
 
 @matr.command(name="fulltree")
 async def matr_fulltree(
-    ctx: commands.Context, user: discord.User | None = None
+    ctx: commands.Context,
+    user: discord.User | None = None,
+    display: Literal["svg", "text"] = "svg",
 ) -> None:
-    """Show a user's full family tree including partners."""
-    bot = _bot(ctx)
-    uid = user.id if user else ctx.author.id
-    text = bot.family.render_tree(
-        uid,
-        _name_of(bot, ctx.guild),
+    """Show a user's full family tree, partners included, as an image or text."""
+    await _post_tree(
+        ctx,
+        user.id if user else ctx.author.id,
         include_spouses=True,
-        max_depth=bot.config.max_tree_depth,
+        display=display,
     )
-    await ctx.reply(embed=_embed(text, quip="tree"))
 
 
 def _solo_line(
