@@ -1235,7 +1235,12 @@ AVATAR_CONCURRENCY = 8
 AVATAR_MAX_BYTES = 32 * 1024
 
 
-def _svg_tree_file(
+# Discord does not inline SVG attachments, so the rendered document is
+# rasterized to PNG before upload. Rendered at 2x so names stay legible.
+PNG_SCALE = 2
+
+
+def _tree_image_file(
     bot: MatrimonyBot,
     uid: int,
     guild: discord.Guild | None,
@@ -1243,7 +1248,14 @@ def _svg_tree_file(
     include_spouses: bool,
     avatars: dict[int, str],
 ) -> discord.File:
-    """Render ``uid``'s tree as a standalone SVG attachment."""
+    """Render ``uid``'s tree as a standalone PNG attachment.
+
+    The SVG is built first (self-contained, no external references), then
+    rasterized with cairosvg. Any failure here - missing cairo, a bad
+    document - propagates so ``_post_tree`` can fall back to text.
+    """
+    import cairosvg
+
     svg = render_tree_svg(
         bot.store,
         uid,
@@ -1253,9 +1265,8 @@ def _svg_tree_file(
         max_nodes=SVG_MAX_NODES,
         avatar_of=avatars.get,
     )
-    return discord.File(
-        io.BytesIO(svg.encode("utf-8")), filename=f"tree-{uid}.svg"
-    )
+    png = cairosvg.svg2png(bytestring=svg.encode("utf-8"), scale=PNG_SCALE)
+    return discord.File(io.BytesIO(png), filename=f"tree-{uid}.png")
 
 
 async def _avatar_map(
@@ -1316,7 +1327,7 @@ async def _post_tree(
             )
             avatars = await _avatar_map(ctx.guild, members)
             await ctx.reply(
-                file=_svg_tree_file(
+                file=_tree_image_file(
                     bot,
                     uid,
                     ctx.guild,

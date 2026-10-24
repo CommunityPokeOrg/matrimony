@@ -196,3 +196,18 @@ def test_tree_members_lists_everyone_drawn(store: Store) -> None:
     # Blood-only view leaves the grandchild's partner out.
     blood = set(tree_members(store, 1, include_spouses=False))
     assert 6 not in blood
+
+
+def test_rendered_svg_rasterizes_to_png(store: Store) -> None:
+    """The document the cog sends must actually convert - Discord will not
+    inline an SVG attachment, so the upload is a PNG."""
+    try:
+        import cairosvg
+    except Exception:  # missing package or native cairo
+        pytest.skip("cairosvg/cairo unavailable")
+
+    build_tree(store)
+    png = cairosvg.svg2png(
+        bytestring=render_tree_svg(store, 1, _name).encode("utf-8")
+    )
+    assert png[:8] == b"\x89PNG\r\n\x1a\n"
