@@ -24,7 +24,8 @@ All commands live under one group, `matr`, invoked with a per-guild prefix
   `abandon` (wipe your whole family).
 - **Family trees** — `tree` (blood relatives) and `fulltree` (partners
   included), rendered as an inline text tree, plus `parent`, `children`,
-  `siblings`, `familysize`, `relationship`.
+  `siblings`, `familysize`, `relationship`. Both take an optional `svg`
+  argument to post a rendered image instead of the text listing.
 - **Global trees** — like the original MarriageBot, family relationships are
   stored globally and follow users across every server the bot is in.
 - **Custom prefixes** — per-guild prefix (`!matr prefix ?` → `?matr marry`).
@@ -112,7 +113,7 @@ explicitly supports bot-authored commands and bot targets:
 | `!matr disown @child` / `disownall` | Remove one/all children |
 | `!matr emancipate` (alias `runaway`) | Remove your parent |
 | `!matr abandon` | Remove all your family ties |
-| `!matr tree [@user]` / `fulltree [@user]` | Blood / full family tree |
+| `!matr tree [@user] [svg]` / `fulltree [@user] [svg]` | Blood / full family tree, text or SVG |
 | `!matr parent` / `children` / `siblings` [@user] | Relatives at a glance |
 | `!matr familysize [@user]` | Size of a user's tree |
 | `!matr relationship @a @b` | How B relates to A |
@@ -334,7 +335,9 @@ Matrimony replicates the original's mechanics as closely as is practical
   Accepting is purely an acknowledgement; it never blocks the marriage.
 
 - Upstream renders trees as Graphviz images; Matrimony renders inline text
-  trees (no Graphviz dependency, works in DMs and on lightweight hosts).
+  trees by default (no Graphviz dependency, works in DMs and on lightweight
+  hosts) and can optionally emit a self-contained SVG when asked for
+  `svg`.
 - Upstream has no documented "bots can be married" support — Matrimony adds
   it deliberately.
 - Upstream now primarily uses slash commands; Matrimony supports both

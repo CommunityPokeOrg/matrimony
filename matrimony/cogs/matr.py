@@ -8,6 +8,8 @@ configured command name) and owns the error handler.
 from __future__ import annotations
 
 import contextlib
+import io
+import itertools
 import random
 import time
 
@@ -20,6 +22,7 @@ from .. import jail as jail_mod
 from ..bot import MatrimonyBot
 from ..ship import ship_score
 from ..store import Notice, Proposal, RestrainingOrder
+from ..svgtree import render_tree_svg
 
 GREEN = discord.Color(0x2ECC71)
 RED = discord.Color(0xE74C3C)
@@ -1217,12 +1220,51 @@ async def matr_abandon(ctx: commands.Context) -> None:
 # Trees and info
 # ---------------------------------------------------------------------------
 
+# Node budget for the SVG renderer: past this the image turns into confetti,
+# so the tree is truncated and labelled instead.
+SVG_MAX_NODES = 200
+
+
+def _wants_svg(format: str | None) -> bool:
+    """Whether the caller asked for an image rather than the text tree."""
+    return (format or "").strip().lower() == "svg"
+
+
+def _svg_tree_file(
+    bot: MatrimonyBot,
+    uid: int,
+    guild: discord.Guild | None,
+    *,
+    include_spouses: bool,
+) -> discord.File:
+    """Render ``uid``'s tree as a standalone SVG attachment."""
+    svg = render_tree_svg(
+        bot.store,
+        uid,
+        _name_of(bot, guild),
+        include_spouses=include_spouses,
+        max_depth=bot.config.max_tree_depth,
+        max_nodes=SVG_MAX_NODES,
+    )
+    return discord.File(
+        io.BytesIO(svg.encode("utf-8")), filename=f"tree-{uid}.svg"
+    )
+
 
 @matr.command(name="tree")
-async def matr_tree(ctx: commands.Context, user: discord.User | None = None) -> None:
-    """Show a user's blood family tree."""
+async def matr_tree(
+    ctx: commands.Context,
+    user: discord.User | None = None,
+    format: str | None = None,
+) -> None:
+    """Show a user's blood family tree. Pass ``svg`` for an image."""
     bot = _bot(ctx)
     uid = user.id if user else ctx.author.id
+    if _wants_svg(format):
+        await ctx.reply(
+            file=_svg_tree_file(bot, uid, ctx.guild, include_spouses=False)
+        )
+        return
     text = bot.family.render_tree(
         uid,
         _name_of(bot, ctx.guild),
@@ -1234,11 +1276,20 @@ async def matr_tree(ctx: commands.Context, user: discord.User | None = None) -> 
 
 @matr.command(name="fulltree")
 async def matr_fulltree(
-    ctx: commands.Context, user: discord.User | None = None
+    ctx: commands.Context,
+    user: discord.User | None = None,
+    format: str | None = None,
 ) -> None:
-    """Show a user's full family tree including partners."""
+    """Show a user's full family tree including partners.
+
+    Pass ``svg`` for an image."""
     bot = _bot(ctx)
     uid = user.id if user else ctx.author.id
+    if _wants_svg(format):
+        await ctx.reply(
+            file=_svg_tree_file(bot, uid, ctx.guild, include_spouses=True)
+        )
+        return
     text = bot.family.render_tree(
         uid,
         _name_of(bot, ctx.guild),
