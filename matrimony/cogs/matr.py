@@ -14,6 +14,7 @@ import io
 import itertools
 import random
 import time
+from typing import Literal
 
 import discord
 from discord import app_commands
@@ -1292,43 +1293,76 @@ async def _avatar_map(
 
 
 async def _post_tree(
-    ctx: commands.Context, uid: int, *, include_spouses: bool
+    ctx: commands.Context,
+    uid: int,
+    *,
+    include_spouses: bool,
+    display: str = "svg",
 ) -> None:
-    """Render and send a tree image, with avatars when they are cheap."""
+    """Send a tree, as an image unless asked otherwise.
+
+    ``display="text"`` posts the inline listing. Any failure while building
+    the image falls back to that same listing, so the command always answers
+    with something.
+    """
     bot = _bot(ctx)
-    members = tree_members(
-        bot.store,
+    if display != "text":
+        with contextlib.suppress(Exception):
+            members = tree_members(
+                bot.store,
+                uid,
+                include_spouses=include_spouses,
+                max_depth=bot.config.max_tree_depth,
+                max_nodes=SVG_MAX_NODES,
+            )
+            avatars = await _avatar_map(ctx.guild, members)
+            await ctx.reply(
+                file=_svg_tree_file(
+                    bot,
+                    uid,
+                    ctx.guild,
+                    include_spouses=include_spouses,
+                    avatars=avatars,
+                )
+            )
+            return
+    text = bot.family.render_tree(
         uid,
+        _name_of(bot, ctx.guild),
         include_spouses=include_spouses,
         max_depth=bot.config.max_tree_depth,
-        max_nodes=SVG_MAX_NODES,
     )
-    avatars = await _avatar_map(ctx.guild, members)
-    await ctx.reply(
-        file=_svg_tree_file(
-            bot,
-            uid,
-            ctx.guild,
-            include_spouses=include_spouses,
-            avatars=avatars,
-        )
-    )
+    await ctx.reply(embed=_embed(text))
 
 
 @matr.command(name="tree")
 async def matr_tree(
-    ctx: commands.Context, user: discord.User | None = None
+    ctx: commands.Context,
+    user: discord.User | None = None,
+    display: Literal["svg", "text"] = "svg",
 ) -> None:
-    """Show a user's blood family tree as an image."""
-    await _post_tree(ctx, user.id if user else ctx.author.id, include_spouses=False)
+    """Show a user's blood family tree as an image, or as text."""
+    await _post_tree(
+        ctx,
+        user.id if user else ctx.author.id,
+        include_spouses=False,
+        display=display,
+    )
 
 
 @matr.command(name="fulltree")
 async def matr_fulltree(
-    ctx: commands.Context, user: discord.User | None = None
+    ctx: commands.Context,
+    user: discord.User | None = None,
+    display: Literal["svg", "text"] = "svg",
 ) -> None:
-    """Show a user's full family tree, partners included, as an image."""
-    await _post_tree(ctx, user.id if user else ctx.author.id, include_spouses=True)
+    """Show a user's full family tree, partners included, as an image or text."""
+    await _post_tree(
+        ctx,
+        user.id if user else ctx.author.id,
+        include_spouses=True,
+        display=display,
+    )
 
 
 def _solo_line(
