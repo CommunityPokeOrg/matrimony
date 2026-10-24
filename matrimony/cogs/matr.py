@@ -11,7 +11,6 @@ import asyncio
 import base64
 import contextlib
 import io
-import itertools
 import random
 import time
 from typing import Literal
