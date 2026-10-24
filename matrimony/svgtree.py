@@ -1,10 +1,13 @@
 """SVG rendering of family trees.
 
 Pure module: a ``Store`` plus a name resolver in, an SVG document out. The
-graph it walks mirrors :meth:`matrimony.family.FamilyView.render_tree` -
-the ancestor chain above the root, blood descendants below, partners beside
-their spouse when asked - so ``!matr tree`` and the text renderer describe
-the same family.
+graph it walks is one downward tree from the highest known ancestor: the
+pedigree climbs up to ``ancestor_gens`` generations (parents, grandparents,
+great-grandparents), then the whole family is laid out below it -
+descendants without a depth limit, each ancestor's side branches (their
+other children and their descendants), their partners beside them, and
+those partners' own children hanging under the couple. Partners of
+non-ancestors join only when ``include_spouses`` is set.
 
 The output is a standalone document: no external references, no fonts to
 fetch, no scripts. Avatars, when supplied, must already be ``data:`` URIs -
@@ -44,6 +47,8 @@ PARTNER = "#f1c40f"
 FALLBACK_FILL = "#3a3d44"
 
 MAX_LABEL = 20
+# Pedigree depth: parents, grandparents, great-grandparents.
+ANCESTOR_GENS = 3
 FONT = "ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif"
 
 Node = dict[str, object]
@@ -76,73 +81,89 @@ def _collect(
     root: int,
     *,
     include_spouses: bool,
-    max_depth: int,
+    ancestor_gens: int,
     max_nodes: int,
-) -> tuple[dict[int, Node], dict[int, list[int]], list[int], bool]:
+) -> tuple[dict[int, Node], dict[int, list[int]], int, list[int], bool]:
     """Walk the graph around ``root``.
 
-    Returns ``(nodes, partners, ancestors, truncated)`` where ``nodes`` maps
-    a user id to ``{"gen", "children"}``, ``partners`` maps a user id to the
-    partner ids drawn beside it, and ``ancestors`` is the parent chain ordered
-    nearest first. Cycle-safe and bounded by ``max_nodes``.
+    Climbs the parent chain at most ``ancestor_gens`` steps to the topmost
+    ancestor, then descends without a depth limit through the whole family
+    below it. Every chain ancestor additionally contributes their partners'
+    children to the drawn offspring, so aunts, uncles, cousins and
+    step-siblings appear alongside the direct line.
+
+    Returns ``(nodes, partners, top, chain, truncated)`` where ``nodes``
+    maps a user id to ``{"gen", "children"}`` (``gen`` counts down from the
+    topmost ancestor), ``partners`` maps a user id to the partner ids drawn
+    beside it, ``top`` is the tree's root id, and ``chain`` is the ancestor
+    chain nearest first. Cycle-safe and bounded by ``max_nodes``.
     """
     nodes: dict[int, Node] = {}
-    ancestors: list[int] = []
     truncated = False
 
-    def add(uid: int, gen: int) -> bool:
-        if uid in nodes or len(nodes) >= max_nodes:
-            return False
-        nodes[uid] = {"gen": gen, "children": []}
-        return True
-
-    add(root, 0)
-
-    # Ancestor chain: gen -1 is the parent, -2 the grandparent, and so on.
-    seen = {root}
+    # Pedigree: parent, grandparent, great-grandparent (nearest first).
+    chain: list[int] = []
+    seen_chain = {root}
     node = root
-    while len(ancestors) < max_depth:
+    while len(chain) < ancestor_gens:
         parent = store.parent_of(node)
-        if parent is None or parent in seen or len(nodes) >= max_nodes:
+        if parent is None or parent in seen_chain:
             break
-        if not add(parent, -(len(ancestors) + 1)):
-            break
-        ancestors.append(parent)
-        seen.add(parent)
+        chain.append(parent)
+        seen_chain.add(parent)
         node = parent
+    chain_set = set(chain)
+    top = chain[-1] if chain else root
 
-    # Blood descendants, breadth first so generation numbers stay honest.
-    frontier: list[tuple[int, int]] = [(root, 0)]
+    def drawn_children(uid: int) -> list[int]:
+        kids = list(store.children_of(uid))
+        if uid in chain_set:
+            # An ancestor's partners raise children in the same household:
+            # draw the partners' own offspring under the couple too.
+            for partner in store.partners_of(uid):
+                kids.extend(store.children_of(partner))
+        seen: set[int] = set()
+        out: list[int] = []
+        for kid in kids:
+            if kid not in seen:
+                seen.add(kid)
+                out.append(kid)
+        return out
+
+    nodes[top] = {"gen": 0, "children": []}
+    frontier = [top]
     while frontier:
-        uid, gen = frontier.pop(0)
-        if gen >= max_depth:
-            continue
-        for child in store.children_of(uid):
-            if child in nodes or child == root:
+        uid = frontier.pop(0)
+        gen = int(nodes[uid]["gen"])
+        for child in drawn_children(uid):
+            if child in nodes:
                 continue
             if len(nodes) >= max_nodes:
                 truncated = True
-                break
-            add(child, gen + 1)
+                continue
+            nodes[child] = {"gen": gen + 1, "children": []}
             nodes[uid]["children"].append(child)  # type: ignore[union-attr]
-            frontier.append((child, gen + 1))
+            frontier.append(child)
 
+    # Ancestors always sit beside their partners - a pedigree missing a
+    # spouse reads as broken. Other members' partners only join when the
+    # caller asked for the full tree. A spouse already drawn as a blood
+    # relative keeps that position.
     partners: dict[int, list[int]] = {}
-    if include_spouses:
-        # A spouse already drawn as a blood relative keeps that position;
-        # this only adds people who would otherwise be missing.
-        claimed: set[int] = set()
-        for uid in nodes:
-            spouses = [
-                p
-                for p in store.partners_of(uid)
-                if p != uid and p not in nodes and p not in claimed
-            ]
-            if spouses:
-                partners[uid] = spouses
-                claimed.update(spouses)
+    claimed: set[int] = set()
+    for uid in nodes:
+        if uid not in chain_set and not include_spouses:
+            continue
+        spouses = [
+            p
+            for p in store.partners_of(uid)
+            if p != uid and p not in nodes and p not in claimed
+        ]
+        if spouses:
+            partners[uid] = spouses
+            claimed.update(spouses)
 
-    return nodes, partners, ancestors, truncated
+    return nodes, partners, top, chain, truncated
 
 
 def tree_members(
@@ -150,7 +171,7 @@ def tree_members(
     root: int,
     *,
     include_spouses: bool = False,
-    max_depth: int = 10,
+    ancestor_gens: int = ANCESTOR_GENS,
     max_nodes: int = 200,
 ) -> list[int]:
     """Ids that :func:`render_tree_svg` would draw, in no particular order.
@@ -158,14 +179,14 @@ def tree_members(
     Callers use this to decide whose avatars are worth fetching before the
     synchronous render runs.
     """
-    nodes, partners, ancestors, _truncated = _collect(
+    nodes, partners, _top, _chain, _truncated = _collect(
         store,
         root,
         include_spouses=include_spouses,
-        max_depth=max_depth,
+        ancestor_gens=ancestor_gens,
         max_nodes=max_nodes,
     )
-    ids = list(nodes) + ancestors
+    ids = list(nodes)
     for spouses in partners.values():
         ids.extend(spouses)
     seen: set[int] = set()
@@ -205,7 +226,7 @@ def render_tree_svg(
     name_of: NameFn,
     *,
     include_spouses: bool = False,
-    max_depth: int = 10,
+    ancestor_gens: int = ANCESTOR_GENS,
     max_nodes: int = 200,
     avatar_of: AvatarFn | None = None,
 ) -> str:
@@ -214,22 +235,21 @@ def render_tree_svg(
     ``avatar_of`` may return a ``data:image/...`` URI per user id; anything
     else is ignored and the node falls back to an initial disc.
     """
-    nodes, partners, ancestors, truncated = _collect(
+    nodes, partners, top, _chain, truncated = _collect(
         store,
         root,
         include_spouses=include_spouses,
-        max_depth=max_depth,
+        ancestor_gens=ancestor_gens,
         max_nodes=max_nodes,
     )
-    width = _widths(root, nodes, partners)
+    width = _widths(top, nodes, partners)
 
     unit = NODE_W + GAP_X
-    gen_offset = len(ancestors)
     boxes: dict[int, tuple[float, float]] = {}
     spouses: list[tuple[int, float, float]] = []
 
     def row_y(gen: int) -> float:
-        return PAD + (gen + gen_offset) * (NODE_H + GAP_Y)
+        return PAD + gen * (NODE_H + GAP_Y)
 
     def place(uid: int, left: float) -> None:
         kids = list(nodes[uid]["children"])  # type: ignore[arg-type]
@@ -250,38 +270,18 @@ def render_tree_svg(
                 place(child, cursor)
                 cursor += width[child] * unit
 
-    place(root, 0.0)
+    place(top, 0.0)
 
-    # Ancestors share the root's centre line, one row per generation.
-    center_x = boxes[root][0] + NODE_W / 2
-    ancestor_boxes = [
-        (uid, center_x - NODE_W / 2, row_y(int(nodes[uid]["gen"])))
-        for uid in ancestors
-    ]
-
-    # Ancestors' partners need boxes too, not just connector lines - a
-    # spouse sitting beside someone in the ancestor chain is drawn exactly
-    # like one beside a descendant.
-    for uid, x, y in ancestor_boxes:
-        for index, spouse in enumerate(partners.get(uid, ())):
-            spouses.append(
-                (spouse, x + NODE_W + GAP_X + index * (NODE_W + GAP_X), y)
-            )
-
-    # Every placed node, for edge drawing. Ancestors and spouses are placed
-    # outside the root's descent, so ``boxes`` alone is not enough.
+    # Every placed node, for edge drawing. Spouses are placed outside the
+    # main descent, so ``boxes`` alone is not enough.
     pos: dict[int, tuple[float, float]] = dict(boxes)
-    for uid, x, y in ancestor_boxes:
-        pos[uid] = (x, y)
     for uid, x, y in spouses:
         pos[uid] = (x, y)
 
     # Normalise so nothing lands at a negative coordinate.
-    xs = [x for x, _ in boxes.values()] + [x for _, x, _ in ancestor_boxes]
-    xs += [x for _, x, _ in spouses]
+    xs = [x for x, _ in boxes.values()] + [x for _, x, _ in spouses]
     min_x = min(xs)
-    ys = [y for _, y in boxes.values()] + [y for _, _, y in ancestor_boxes]
-    ys += [y for _, _, y in spouses]
+    ys = [y for _, y in boxes.values()] + [y for _, _, y in spouses]
     max_y = max(ys)
 
     canvas_w = int(round(max(xs) - min_x + NODE_W + PAD * 2))
@@ -325,12 +325,6 @@ def render_tree_svg(
                 continue
             cx, cy = pos[child]
             edge(x + NODE_W / 2, y + NODE_H, cx + NODE_W / 2, cy)
-
-    previous = root
-    for uid, x, y in ancestor_boxes:
-        px, py = pos[previous]
-        edge(px + NODE_W / 2, py, x + NODE_W / 2, y + NODE_H)
-        previous = uid
 
     # Partner connectors: dashed, in the marriage gold.
     for uid, spouse_list in partners.items():
@@ -389,8 +383,6 @@ def render_tree_svg(
 
     for uid, (x, y) in boxes.items():
         box(uid, x, y, root_node=uid == root, partner=False)
-    for uid, x, y in ancestor_boxes:
-        box(uid, x, y, root_node=False, partner=False)
     for uid, x, y in spouses:
         box(uid, x, y, root_node=False, partner=True)
 

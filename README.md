@@ -25,9 +25,11 @@ All commands live under one group, `matr`, invoked with a per-guild prefix
 - **Family trees** — `tree` (blood relatives) and `fulltree` (partners
   included), posted as a PNG image with member avatars (rendered from a
   self-contained SVG via cairosvg, so Discord inlines it), plus
-  `parent`, `children`, `siblings`, `familysize`, `relationship`. Pass
-  `text` to get the plain inline listing instead, or to fall back when
-  image rendering fails.
+  `parent`, `children`, `siblings`, `familysize`, `relationship`. The image
+  shows up to three generations of ancestors — each with their partners,
+  other children and those partners' children — and every descendant below
+  the viewed user, capped at 200 nodes. Pass `text` to get the plain
+  inline listing instead, or to fall back when image rendering fails.
 - **Global trees** — like the original MarriageBot, family relationships are
   stored globally and follow users across every server the bot is in.
 - **Custom prefixes** — per-guild prefix (`!matr prefix ?` → `?matr marry`).

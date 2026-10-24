@@ -84,13 +84,76 @@ def test_svg_empty_family(store: Store) -> None:
     assert int(root.get("width", "0")) > 0
 
 
-def test_svg_depth_limit(store: Store) -> None:
-    # chain 1 -> 2 -> 3 -> 4 -> 5
-    for i in range(1, 5):
+def test_svg_descendants_unbounded(store: Store) -> None:
+    """Children, grandchildren, great-grandchildren - all the way down."""
+    # chain 1 -> 2 -> ... -> 8, seven generations deep
+    for i in range(1, 8):
         store.add_child(i, i + 1)
-    names = text_nodes(render_tree_svg(store, 1, _name, max_depth=2))
-    assert "U2" in names and "U3" in names
-    assert "U4" not in names
+    names = text_nodes(render_tree_svg(store, 1, _name))
+    for i in range(1, 9):
+        assert f"U{i}" in names
+
+
+def test_svg_ancestors_capped_at_three_generations(store: Store) -> None:
+    """Parents, grandparents and great-grandparents only."""
+    # chain 1 -> 2 -> ... -> 7, viewed from the bottom
+    for i in range(1, 7):
+        store.add_child(i, i + 1)
+    names = text_nodes(render_tree_svg(store, 7, _name))
+    # parent, grandparent, great-grandparent
+    assert {"U6", "U5", "U4"} <= set(names)
+    # ...but no further up the line.
+    assert "U3" not in names
+    assert "U2" not in names
+    assert "U1" not in names
+
+
+def test_svg_ancestor_side_branches(store: Store) -> None:
+    """An ancestor's other children - aunts, uncles and their kids."""
+    # 1 -> 2 -> 3 is the viewed line; 1 also has 4, who has 5.
+    store.add_child(1, 2)
+    store.add_child(2, 3)
+    store.add_child(1, 4)
+    store.add_child(4, 5)
+    names = text_nodes(render_tree_svg(store, 3, _name))
+    # aunt/uncle and cousin appear beside the direct line
+    assert {"U1", "U2", "U3", "U4", "U5"} <= set(names)
+
+
+def test_svg_ancestor_partners_and_their_children(store: Store) -> None:
+    """Each ancestor's partner is drawn, and so are that partner's kids."""
+    store.add_child(1, 2)
+    store.add_child(2, 3)
+    store.add_partners(1, 7)  # grandparent's partner
+    store.add_child(7, 8)  # that partner's own child
+    names = text_nodes(render_tree_svg(store, 3, _name))
+    assert {"U7", "U8"} <= set(names)
+
+
+def test_svg_no_revisit_in_shared_graph(store: Store) -> None:
+    """A node reachable by two routes is still drawn exactly once."""
+    store.add_child(1, 2)
+    store.add_child(1, 3)
+    store.add_child(2, 4)
+    store.add_partners(2, 3)
+    # When 1 is an ancestor its partners' children merge in - but no node
+    # may be added twice through the shared child 4.
+    for i in (3, 4):
+        store.add_child(3, 4 + i)  # children of the side child
+    svg = render_tree_svg(store, 4, _name)
+    ElementTree.fromstring(svg)
+    # name text appears once per drawn node
+    names = text_nodes(svg)
+    assert names.count("U2") == 1
+    assert names.count("U4") == 1
+
+
+def test_svg_parent_cycle_terminates(store: Store) -> None:
+    """1 -> 3 and 3 -> 1: the chain walk and descent both stop."""
+    store.add_child(3, 1)
+    store.add_child(1, 3)
+    names = text_nodes(render_tree_svg(store, 1, _name))
+    assert {"U1", "U3"} <= set(names)
 
 
 def test_svg_cycle_safe(store: Store) -> None:
